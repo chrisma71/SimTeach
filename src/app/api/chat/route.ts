@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { students } from '@/lib/students';
 import { getDatabase } from '@/lib/mongodb';
 
@@ -240,8 +240,8 @@ export async function POST(request: NextRequest) {
       })));
     }
 
-    // Generate AI response using OpenAI with personalized system prompt and full history
-    const aiResponse = await generateAIResponseWithOpenAI(message, fullConversationHistory, systemPrompt);
+    // Generate AI response using Gemini with personalized system prompt and full history
+    const aiResponse = await generateAIResponseWithGemini(message, fullConversationHistory, systemPrompt);
 
     return NextResponse.json({ response: aiResponse });
   } catch (error) {
@@ -253,45 +253,31 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Function to generate AI response using OpenAI with personalized system prompt
-async function generateAIResponseWithOpenAI(userMessage: string, conversationHistory: any[], systemPrompt: string): Promise<string> {
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
+// Function to generate AI response using Gemini with personalized system prompt
+async function generateAIResponseWithGemini(userMessage: string, conversationHistory: any[], systemPrompt: string): Promise<string> {
+  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
   try {
-    // Prepare messages for OpenAI
-    const messages = [
-      {
-        role: "system" as const,
-        content: systemPrompt
-      },
-      ...conversationHistory.map(msg => ({
-        role: msg.isUser ? "user" as const : "assistant" as const,
-        content: msg.text
-      })),
-      {
-        role: "user" as const,
-        content: userMessage
-      }
-    ];
+    // Prepare conversation history for Gemini
+    const conversationText = conversationHistory
+      .map(msg => `${msg.isUser ? 'Tutor' : 'Student'}: ${msg.text}`)
+      .join('\n');
 
-    console.log('=== OPENAI REQUEST DEBUG ===');
+    const fullPrompt = `${systemPrompt}
+
+CONVERSATION HISTORY:
+${conversationText}
+
+CURRENT MESSAGE FROM TUTOR:
+${userMessage}
+
+Respond as the student:`;
+
+    console.log('=== GEMINI REQUEST DEBUG ===');
     console.log('System prompt length:', systemPrompt.length);
-    console.log('Total messages being sent:', messages.length);
     console.log('Conversation history messages:', conversationHistory.length);
     console.log('Current user message:', userMessage);
-    
-    // Show the first few messages in detail
-    console.log('\n--- FIRST 5 MESSAGES BEING SENT TO AI ---');
-    messages.slice(0, 5).forEach((msg, index) => {
-      console.log(`Message ${index + 1} (${msg.role}):`, msg.content?.substring(0, 200) + (msg.content?.length > 200 ? '...' : ''));
-    });
-    
-    // Show conversation history details
-    console.log('\n--- CONVERSATION HISTORY DETAILS ---');
-    console.log('Previous session messages:', conversationHistory.filter(msg => !msg.isUser).length);
-    console.log('Previous user messages:', conversationHistory.filter(msg => msg.isUser).length);
+    console.log('Full prompt length:', fullPrompt.length);
     
     if (conversationHistory.length > 0) {
       console.log('Sample previous messages:');
@@ -300,20 +286,32 @@ async function generateAIResponseWithOpenAI(userMessage: string, conversationHis
       });
     }
     
-    console.log('=== END OPENAI REQUEST DEBUG ===\n');
+    console.log('=== END GEMINI REQUEST DEBUG ===\n');
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: messages,
-      max_tokens: 150,
-      temperature: 0.7,
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    const result = await model.generateContent({
+      contents: [{ 
+        role: "user",
+        parts: [{ text: fullPrompt }] 
+      }],
+      generationConfig: {
+        maxOutputTokens: 150,
+        temperature: 0.7,
+      },
     });
 
-    const response = completion.choices[0]?.message?.content || "I'm sorry, I didn't understand that.";
+    let response = result.response.text() || "I'm sorry, I didn't understand that.";
+    
+    // Clean the response text by removing markdown code blocks if present
+    if (response && response.trim().startsWith('```')) {
+      response = response.trim().replace(/^```\s*/, '').replace(/\s*```$/, '');
+    }
+    
     console.log('AI Response:', response);
     return response;
   } catch (error) {
-    console.error('OpenAI API error:', error);
+    console.error('Gemini API error:', error);
     throw new Error('Failed to generate AI response');
   }
 }

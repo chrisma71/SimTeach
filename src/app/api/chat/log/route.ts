@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/mongodb';
 import { ChatLog, Feedback } from '@/types/chatLog';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { ObjectId } from 'mongodb';
 
 export async function POST(request: NextRequest) {
@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
 
     // Generate feedback for the session asynchronously
     try {
+      console.log('Starting feedback generation...');
       const feedbackResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/feedback/generate`, {
         method: 'POST',
         headers: {
@@ -110,8 +111,11 @@ export async function POST(request: NextRequest) {
         }),
       });
 
+      console.log('Feedback response status:', feedbackResponse.status);
+      
       if (feedbackResponse.ok) {
         const feedbackData = await feedbackResponse.json();
+        console.log('Feedback data received:', feedbackData);
         
         // Update the chat log with feedback
         await chatLogsCollection.updateOne(
@@ -121,7 +125,8 @@ export async function POST(request: NextRequest) {
         
         console.log('Feedback generated and stored successfully');
       } else {
-        console.error('Failed to generate feedback');
+        const errorText = await feedbackResponse.text();
+        console.error('Failed to generate feedback:', feedbackResponse.status, errorText);
       }
     } catch (feedbackError) {
       console.error('Error generating feedback:', feedbackError);
@@ -153,9 +158,7 @@ export async function POST(request: NextRequest) {
 // Function to generate session summary asynchronously
 async function generateSessionSummary(sessionId: string, transcript: any[], studentName: string, studentSubject: string) {
   try {
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
     // Create a summary prompt that focuses on what was accomplished and how the student felt
     const summaryPrompt = `You are analyzing a tutoring session between a tutor and ${studentName}, a student studying ${studentSubject || 'Physics'}.
@@ -180,23 +183,25 @@ Summary:`;
     console.log('Student:', studentName);
     console.log('Transcript length:', transcript.length, 'messages');
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert at analyzing tutoring sessions and creating concise, insightful summaries from the student's perspective. Focus on what was accomplished, how the student felt, and any key challenges or breakthroughs."
-        },
-        {
-          role: "user",
-          content: summaryPrompt
-        }
-      ],
-      max_tokens: 150,
-      temperature: 0.7,
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    const result = await model.generateContent({
+      contents: [{ 
+        role: "user",
+        parts: [{ text: summaryPrompt }] 
+      }],
+      generationConfig: {
+        maxOutputTokens: 150,
+        temperature: 0.7,
+      },
     });
 
-    const summary = completion.choices[0]?.message?.content || "Session completed - no summary generated";
+    let summary = result.response.text() || "Session completed - no summary generated";
+    
+    // Clean the response text by removing markdown code blocks if present
+    if (summary && summary.trim().startsWith('```')) {
+      summary = summary.trim().replace(/^```\s*/, '').replace(/\s*```$/, '');
+    }
 
     console.log('Generated summary:', summary);
 

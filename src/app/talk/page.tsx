@@ -43,6 +43,7 @@ export default function TalkPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [audioRecorder, setAudioRecorder] = useState<MediaRecorder | null>(null);
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
+  const [sharedMicrophoneStream, setSharedMicrophoneStream] = useState<MediaStream | null>(null);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -127,7 +128,12 @@ export default function TalkPage() {
         return;
       }
       
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Use shared microphone stream if available, otherwise create new one
+      let stream = sharedMicrophoneStream;
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setSharedMicrophoneStream(stream);
+      }
       microphoneStreamRef.current = stream; // Store the stream for cleanup
       
       // Resume audio context if it's suspended, or create new one if closed/doesn't exist
@@ -185,6 +191,17 @@ export default function TalkPage() {
         console.log('AudioContext close error:', err);
       }
       audioContextRef.current = null;
+    }
+  };
+
+  // Stop shared microphone stream
+  const stopSharedMicrophoneStream = () => {
+    if (sharedMicrophoneStream) {
+      sharedMicrophoneStream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Shared microphone track stopped');
+      });
+      setSharedMicrophoneStream(null);
     }
   };
 
@@ -333,6 +350,7 @@ export default function TalkPage() {
         userVideoStream.getTracks().forEach(track => track.stop());
       }
       stopAudioAnalysis();
+      stopSharedMicrophoneStream();
       if (audioContextRef.current) {
         try {
           audioContextRef.current.close();
@@ -355,8 +373,16 @@ export default function TalkPage() {
   useEffect(() => {
     if (!isLoading && activeProfile) {
       console.log(`Profile loaded: ${activeProfile.name} - ${activeProfile.subject} - ID: ${activeProfile.id}`);
+      
+      // Start audio recording as soon as profile is loaded
+      if (!isRecording) {
+        console.log('Starting audio recording on profile load');
+        startAudioRecording().catch(error => {
+          console.error('Failed to start audio recording on profile load:', error);
+        });
+      }
     }
-  }, [activeProfile, isLoading]);
+  }, [activeProfile, isLoading, isRecording]);
 
   // Handle page exit - log chat session before leaving
   useEffect(() => {
@@ -374,6 +400,10 @@ export default function TalkPage() {
       // Stop camera if active
       if (userVideoStream) {
         userVideoStream.getTracks().forEach(track => track.stop());
+      }
+      // Stop audio recording
+      if (audioRecorder && audioRecorder.state !== 'inactive') {
+        audioRecorder.stop();
       }
       
       if (!hasLoggedSession && activeProfile && messages.length > 0 && user) {
@@ -403,6 +433,7 @@ export default function TalkPage() {
           recognitionRef.current.stop();
         }
         stopAudioAnalysis();
+        stopSharedMicrophoneStream();
         if (audioContextRef.current) {
           try {
             audioContextRef.current.close();
@@ -676,6 +707,7 @@ export default function TalkPage() {
     
     // Start audio recording when first turning on mic (if not already recording)
     if (!isRecording) {
+      console.log('Starting audio recording with microphone activation');
       await startAudioRecording();
     }
     
@@ -757,32 +789,79 @@ export default function TalkPage() {
   const startAudioRecording = async () => {
     try {
       console.log('Attempting to start audio recording...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      
+      // Clear any existing chunks
+      setAudioChunks([]);
+      
+      // Use shared microphone stream if available, otherwise create new one
+      let stream = sharedMicrophoneStream;
+      if (!stream) {
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 44100
+          } 
+        });
+        setSharedMicrophoneStream(stream);
+      }
+      
+      // Try different MIME types for better compatibility - prioritize more compatible formats
+      let mimeType = 'audio/wav';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/mp4';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/webm';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/webm;codecs=opus';
+          }
+        }
+      }
+      
+      console.log('Using MIME type:', mimeType);
+      console.log('Supported types:', [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/wav'
+      ].filter(type => MediaRecorder.isTypeSupported(type)));
+      
+      const recorder = new MediaRecorder(stream, {
+        mimeType: mimeType
+      });
       
       recorder.ondataavailable = (event) => {
-        console.log('Audio data available, size:', event.data.size);
+        console.log('Audio data available, size:', event.data.size, 'type:', event.data.type);
         if (event.data.size > 0) {
           setAudioChunks(prev => {
             const newChunks = [...prev, event.data];
-            console.log('Total audio chunks:', newChunks.length);
+            const totalSize = newChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+            console.log('Total audio chunks:', newChunks.length, 'Total size:', totalSize, 'bytes');
             return newChunks;
           });
+        } else {
+          console.log('Received empty audio chunk - this might indicate recording issues');
         }
       };
       
       recorder.onstart = () => {
-        console.log('MediaRecorder started');
+        console.log('MediaRecorder started successfully');
+        setIsRecording(true);
       };
       
       recorder.onstop = () => {
-        console.log('MediaRecorder stopped');
+        console.log('MediaRecorder stopped, final chunks:', audioChunks.length);
       };
       
-      recorder.start(1000); // Record in 1-second chunks
+      recorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        setError('Audio recording error occurred');
+      };
+      
+      // Start recording with smaller time slices for better reliability
+      recorder.start(500); // Record in 500ms chunks for better reliability
       setAudioRecorder(recorder);
-      setIsRecording(true);
-      console.log('Audio recording started successfully');
+      console.log('Audio recording setup completed');
     } catch (error) {
       console.error('Error starting audio recording:', error);
       setError('Could not start audio recording');
@@ -794,15 +873,27 @@ export default function TalkPage() {
       if (audioRecorder && audioRecorder.state !== 'inactive') {
         console.log('Stopping audio recording...');
         
+        // Request final data before stopping
+        audioRecorder.requestData();
+        
         audioRecorder.onstop = () => {
           console.log('Audio recording stopped, total chunks:', audioChunks.length);
-          audioRecorder.stream.getTracks().forEach(track => track.stop());
+          const totalSize = audioChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+          console.log('Total audio data size:', totalSize, 'bytes');
+          
+          // Stop all tracks
+          audioRecorder.stream.getTracks().forEach(track => {
+            track.stop();
+            console.log('Audio track stopped');
+          });
+          
           setIsRecording(false);
           resolve();
         };
         
         audioRecorder.stop();
       } else {
+        console.log('No active audio recorder to stop');
         setIsRecording(false);
         resolve();
       }
@@ -810,10 +901,87 @@ export default function TalkPage() {
   };
 
   const getAudioBlob = (): Blob | null => {
+    console.log('getAudioBlob called - chunks:', audioChunks.length, 'recorder state:', audioRecorder?.state);
+    
     if (audioChunks.length > 0) {
-      return new Blob(audioChunks, { type: 'audio/webm' });
+      // Use the same MIME type that was used for recording
+      const mimeType = audioRecorder?.mimeType || 'audio/webm';
+      const blob = new Blob(audioChunks, { type: mimeType });
+      console.log('Created audio blob:', {
+        size: blob.size,
+        type: blob.type,
+        chunks: audioChunks.length,
+        mimeType: mimeType,
+        totalChunkSize: audioChunks.reduce((sum, chunk) => sum + chunk.size, 0)
+      });
+      
+      // Test if the blob is valid by creating a URL
+      const testUrl = URL.createObjectURL(blob);
+      console.log('Test URL created for blob:', testUrl);
+      URL.revokeObjectURL(testUrl);
+      
+      return blob;
     }
+    console.log('No audio chunks available for blob creation');
     return null;
+  };
+
+  // Test function to create a simple audio file
+  const createTestAudio = (): string => {
+    console.log('=== AUDIO FORMAT SUPPORT TEST ===');
+    const formats = [
+      'audio/wav',
+      'audio/mp4',
+      'audio/webm',
+      'audio/webm;codecs=opus',
+      'audio/ogg'
+    ];
+    
+    formats.forEach(format => {
+      const supported = MediaRecorder.isTypeSupported(format);
+      console.log(`${format}: ${supported ? '✅' : '❌'}`);
+    });
+    console.log('=== END AUDIO FORMAT TEST ===');
+    
+    // Create a simple 1-second sine wave audio
+    const sampleRate = 44100;
+    const duration = 1; // 1 second
+    const frequency = 440; // A4 note
+    const samples = sampleRate * duration;
+    const buffer = new ArrayBuffer(44 + samples * 2);
+    const view = new DataView(buffer);
+    
+    // WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples * 2, true);
+    
+    // Generate sine wave
+    for (let i = 0; i < samples; i++) {
+      const sample = Math.sin(2 * Math.PI * frequency * i / sampleRate) * 0.3;
+      view.setInt16(44 + i * 2, sample * 32767, true);
+    }
+    
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    console.log('Created test audio URL:', url);
+    return url;
   };
 
   const logChatSession = async () => {
@@ -884,6 +1052,7 @@ export default function TalkPage() {
     // Stop audio analysis immediately (this now includes microphone stream cleanup)
     console.log('Stopping audio analysis and microphone stream');
     stopAudioAnalysis();
+    stopSharedMicrophoneStream();
     await stopAudioRecording(); // Stop audio recording and wait for completion
     setIsListening(false);
     setIsSpeaking(false);
@@ -912,16 +1081,82 @@ export default function TalkPage() {
       console.log('Audio blob:', audioBlob, 'Chunks:', audioChunks.length);
       if (audioBlob) {
         setError("Processing audio recording...");
-        audioData = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            console.log('Audio data processed, size:', (reader.result as string).length);
-            resolve(reader.result as string);
+        console.log('Converting audio blob to base64...');
+        
+        // Test the blob first
+        const testUrl = URL.createObjectURL(audioBlob);
+        console.log('Test URL created:', testUrl);
+        
+        // Try to play the test audio
+        const testAudio = new Audio(testUrl);
+        const canPlay = await new Promise<boolean>((resolve) => {
+          testAudio.oncanplay = () => {
+            console.log('✅ Audio blob is playable');
+            URL.revokeObjectURL(testUrl);
+            resolve(true);
           };
-          reader.readAsDataURL(audioBlob);
+          testAudio.onerror = (e) => {
+            console.error('❌ Audio blob is not playable:', e);
+            URL.revokeObjectURL(testUrl);
+            resolve(false);
+          };
+          testAudio.load();
+          
+          // Timeout after 3 seconds
+          setTimeout(() => {
+            console.log('⏰ Audio test timeout');
+            URL.revokeObjectURL(testUrl);
+            resolve(false);
+          }, 3000);
         });
+        
+        if (canPlay) {
+          // Try to convert to a more compatible format if needed
+          let finalBlob = audioBlob;
+          
+          // If it's WebM and we want better compatibility, try to convert
+          if (audioBlob.type.includes('webm')) {
+            console.log('Converting WebM to MP4 for better compatibility...');
+            try {
+              // Create a new blob with MP4 MIME type (this is a simple approach)
+              finalBlob = new Blob([audioBlob], { type: 'audio/mp4' });
+              console.log('Converted blob type:', finalBlob.type);
+            } catch (e) {
+              console.log('Conversion failed, using original blob:', e);
+            }
+          }
+          
+          audioData = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const result = reader.result as string;
+              console.log('Audio data processed:', {
+                size: result.length,
+                type: result.substring(0, 50) + '...',
+                blobSize: finalBlob.size,
+                blobType: finalBlob.type
+              });
+              resolve(result);
+            };
+            reader.onerror = (error) => {
+              console.error('Error reading audio blob:', error);
+              reject(error);
+            };
+            reader.readAsDataURL(finalBlob);
+          });
+        } else {
+          console.log('Skipping audio data - blob is not playable');
+        }
       } else {
         console.log('No audio blob available');
+      }
+      
+      // If no audio data was captured, log it but don't create fallback test audio
+      if (!audioData) {
+        console.log('No audio data was captured during the session');
+        console.log('Audio chunks collected:', audioChunks.length);
+        console.log('Audio recorder state:', audioRecorder?.state);
+        console.log('Recording state:', isRecording);
       }
       
       const response = await fetch('/api/chat/log', {
@@ -1162,6 +1397,19 @@ export default function TalkPage() {
                   className="w-30 h-12 bg-gray-600 hover:bg-gray-700 text-white rounded-full flex items-center justify-center transition-all duration-200 px-4 disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
                   Clear Chat
+                </button>
+
+                {/* Test Audio Button */}
+                <button
+                  onClick={() => {
+                    const testUrl = createTestAudio();
+                    const audio = new Audio(testUrl);
+                    audio.play().catch(e => console.error('Test audio error:', e));
+                  }}
+                  disabled={isLoading}
+                  className="w-30 h-12 bg-yellow-600 hover:bg-yellow-700 text-white rounded-full flex items-center justify-center transition-all duration-200 px-4 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Test Audio
                 </button>
 
                 {/* End Call Button */}

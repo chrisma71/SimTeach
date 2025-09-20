@@ -21,6 +21,7 @@ export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('transcript');
+  const [audioError, setAudioError] = useState<string | null>(null);
   
   const caseId = params.caseId as string;
 
@@ -68,6 +69,34 @@ export default function ReviewPage() {
 
   const formatDate = (date: Date) => {
     return new Date(date).toLocaleString();
+  };
+
+  const validateAudioUrl = (url: string): boolean => {
+    if (!url) return false;
+    
+    // Check if it's a valid data URL
+    if (url.startsWith('data:audio/')) {
+      try {
+        // Basic validation of data URL format
+        const [header, data] = url.split(',');
+        if (!header || !data) return false;
+        
+        // Check if it has a valid audio MIME type
+        const mimeType = header.split(':')[1]?.split(';')[0];
+        const validAudioTypes = ['audio/wav', 'audio/mp4', 'audio/webm', 'audio/ogg'];
+        return validAudioTypes.includes(mimeType);
+      } catch {
+        return false;
+      }
+    }
+    
+    // For non-data URLs, check if it's a valid URL
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   if (loading) {
@@ -160,16 +189,129 @@ export default function ReviewPage() {
             {/* Audio Player */}
             <div className="mb-6 p-4 bg-gray-50 rounded-lg">
               <h4 className="text-sm font-medium text-gray-700 mb-3">Session Recording</h4>
-              {caseData?.audioUrl ? (
-                <audio 
-                  controls 
-                  className="w-full"
-                  preload="metadata"
-                >
-                  <source src={caseData.audioUrl} type="audio/webm" />
-                  <source src={caseData.audioUrl} type="audio/mp4" />
-                  Your browser does not support the audio element.
-                </audio>
+              {caseData?.audioUrl && validateAudioUrl(caseData.audioUrl) ? (
+                <div>
+                  <audio 
+                    controls 
+                    className="w-full"
+                    preload="metadata"
+                    onError={(e) => {
+                      const audioElement = e.currentTarget as HTMLAudioElement;
+                      const error = audioElement.error;
+                      
+                      console.error('Audio playback error:', {
+                        error: error,
+                        code: error?.code,
+                        message: error?.message,
+                        audioUrl: caseData.audioUrl?.substring(0, 100) + '...',
+                        audioSrc: audioElement.src,
+                        networkState: audioElement.networkState,
+                        readyState: audioElement.readyState
+                      });
+                      
+                      // Handle specific error codes and set user-friendly error messages
+                      if (error) {
+                        switch (error.code) {
+                          case MediaError.MEDIA_ERR_ABORTED:
+                            console.log('Audio playback was aborted');
+                            setAudioError('Audio playback was interrupted');
+                            break;
+                          case MediaError.MEDIA_ERR_NETWORK:
+                            console.log('Network error occurred while loading audio');
+                            setAudioError('Network error loading audio');
+                            break;
+                          case MediaError.MEDIA_ERR_DECODE:
+                            console.log('Audio decoding error - format may not be supported');
+                            setAudioError('Audio format not supported by your browser');
+                            break;
+                          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                            console.log('Audio format not supported by browser');
+                            setAudioError('Audio format not supported by your browser');
+                            break;
+                          default:
+                            console.log('Unknown audio error');
+                            setAudioError('Audio playback error occurred');
+                        }
+                      } else {
+                        setAudioError('Audio playback error occurred');
+                      }
+                    }}
+                    onLoadStart={() => {
+                      console.log('Audio loading started');
+                    }}
+                    onCanPlay={() => {
+                      console.log('Audio can play');
+                    }}
+                    onLoadedMetadata={() => {
+                      console.log('Audio metadata loaded');
+                    }}
+                    onLoad={() => {
+                      console.log('Audio loaded');
+                    }}
+                  >
+                    {/* Try different source formats based on the data URL format */}
+                    {caseData.audioUrl?.startsWith('data:audio/wav') && (
+                      <source src={caseData.audioUrl} type="audio/wav" />
+                    )}
+                    {caseData.audioUrl?.startsWith('data:audio/mp4') && (
+                      <source src={caseData.audioUrl} type="audio/mp4" />
+                    )}
+                    {caseData.audioUrl?.startsWith('data:audio/webm') && (
+                      <>
+                        <source src={caseData.audioUrl} type="audio/webm;codecs=opus" />
+                        <source src={caseData.audioUrl} type="audio/webm" />
+                      </>
+                    )}
+                    {caseData.audioUrl?.startsWith('data:audio/ogg') && (
+                      <source src={caseData.audioUrl} type="audio/ogg" />
+                    )}
+                    {/* Fallback: try all formats if we can't determine the type */}
+                    {!caseData.audioUrl?.startsWith('data:audio/') && (
+                      <>
+                        <source src={caseData.audioUrl} type="audio/wav" />
+                        <source src={caseData.audioUrl} type="audio/mp4" />
+                        <source src={caseData.audioUrl} type="audio/webm;codecs=opus" />
+                        <source src={caseData.audioUrl} type="audio/webm" />
+                        <source src={caseData.audioUrl} type="audio/ogg" />
+                      </>
+                    )}
+                    Your browser does not support the audio element.
+                  </audio>
+                  <div className="mt-2 text-xs text-gray-500">
+                    <p>Audio data size: {caseData.audioUrl ? Math.round(caseData.audioUrl.length * 0.75) : 0} bytes (estimated)</p>
+                    <p>Format: {caseData.audioUrl?.startsWith('data:audio/webm') ? 'WebM (Opus)' : 
+                              caseData.audioUrl?.startsWith('data:audio/wav') ? 'WAV' :
+                              caseData.audioUrl?.startsWith('data:audio/mp4') ? 'MP4' :
+                              caseData.audioUrl?.startsWith('data:audio/ogg') ? 'OGG' : 'Unknown'}</p>
+                    <p>Data URL: {caseData.audioUrl?.substring(0, 50)}...</p>
+                  </div>
+                  
+                  {/* Audio Error Display */}
+                  {audioError && (
+                    <div className="mt-3 p-3 bg-red-100 border border-red-300 rounded-lg">
+                      <div className="flex items-center">
+                        <svg className="w-5 h-5 text-red-500 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-sm text-red-700">{audioError}</span>
+                        <button
+                          onClick={() => setAudioError(null)}
+                          className="ml-auto text-red-500 hover:text-red-700"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : caseData?.audioUrl && !validateAudioUrl(caseData.audioUrl) ? (
+                <div className="text-center text-red-500 py-8">
+                  <svg className="w-12 h-12 mx-auto mb-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <p className="font-medium">Invalid Audio Format</p>
+                  <p className="text-sm mt-1">The audio recording format is not supported or corrupted</p>
+                </div>
               ) : (
                 <div className="text-center py-4 text-gray-500">
                   <div className="text-2xl mb-2">🎤</div>

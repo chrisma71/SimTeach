@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Feedback } from '@/types/chatLog';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 export async function POST(request: NextRequest) {
   try {
+    console.log('=== FEEDBACK GENERATION STARTED ===');
     const { transcript, studentName, studentSubject, conversationLength } = await request.json();
+    console.log('Feedback request data:', { studentName, studentSubject, conversationLength, transcriptLength: transcript?.length });
 
     if (!transcript || !Array.isArray(transcript) || transcript.length === 0) {
       return NextResponse.json(
@@ -69,37 +69,50 @@ Please analyze this tutoring session and provide detailed feedback in the follow
 
 Focus on constructive feedback that helps the tutor improve their skills.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        {
-          role: "system",
-          content: "You are an expert tutoring coach. Analyze tutoring sessions and provide detailed, constructive feedback in JSON format."
-        },
-        {
-          role: "user",
-          content: feedbackPrompt
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
+    console.log('Generating feedback with Gemini...');
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    const result = await model.generateContent({
+      contents: [{ 
+        role: "user",
+        parts: [{ text: feedbackPrompt }] 
+      }],
+      generationConfig: {
+        maxOutputTokens: 2000,
+        temperature: 0.7,
+      },
     });
 
-    const feedbackText = completion.choices[0]?.message?.content;
+    const feedbackText = result.response.text();
+    console.log('Generated feedback text:', feedbackText?.substring(0, 200) + '...');
     
     if (!feedbackText) {
       throw new Error('No feedback generated');
     }
 
+    // Clean the response text by removing markdown code blocks
+    let cleanedText = feedbackText.trim();
+    if (cleanedText.startsWith('```json')) {
+      cleanedText = cleanedText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    } else if (cleanedText.startsWith('```')) {
+      cleanedText = cleanedText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+    }
+    
+    console.log('Cleaned feedback text:', cleanedText.substring(0, 200) + '...');
+
     // Parse the JSON response
     let feedback: Feedback;
     try {
-      feedback = JSON.parse(feedbackText);
+      feedback = JSON.parse(cleanedText);
+      console.log('Successfully parsed feedback JSON');
     } catch (parseError) {
       console.error('Failed to parse feedback JSON:', parseError);
+      console.error('Raw feedback text:', feedbackText);
+      console.error('Cleaned feedback text:', cleanedText);
       throw new Error('Invalid feedback format generated');
     }
 
+    console.log('=== FEEDBACK GENERATION COMPLETED ===');
     return NextResponse.json({
       success: true,
       feedback
