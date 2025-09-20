@@ -23,6 +23,8 @@ export default function TalkPage() {
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioLevels, setAudioLevels] = useState<number[]>(() => new Array(8).fill(0));
   const [audioAnalysisWorking, setAudioAnalysisWorking] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [speechTimeout, setSpeechTimeout] = useState<NodeJS.Timeout | null>(null);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -165,16 +167,47 @@ export default function TalkPage() {
       };
 
       recognitionRef.current.onresult = async (event) => {
-        // Only process final results, not interim ones
+        let finalTranscript = '';
+        let interimText = '';
+        
+        // Process all results
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
           if (result.isFinal) {
-            const transcript = result[0].transcript;
-            if (transcript.trim()) {
-              setHasUserSpoken(true);
-              await handleUserMessage(transcript);
-            }
+            finalTranscript += result[0].transcript;
+          } else {
+            interimText += result[0].transcript;
           }
+        }
+        
+        // Update interim transcript for display
+        setInterimTranscript(interimText);
+        
+        // If we have final results, process them
+        if (finalTranscript.trim()) {
+          // Clear any existing timeout
+          if (speechTimeout) {
+            clearTimeout(speechTimeout);
+            setSpeechTimeout(null);
+          }
+          
+          setHasUserSpoken(true);
+          await handleUserMessage(finalTranscript);
+        } else if (interimText.trim()) {
+          // If we have interim results, set a timeout to process them if no more speech comes
+          if (speechTimeout) {
+            clearTimeout(speechTimeout);
+          }
+          
+          const timeout = setTimeout(async () => {
+            if (interimText.trim()) {
+              setHasUserSpoken(true);
+              await handleUserMessage(interimText);
+              setInterimTranscript('');
+            }
+          }, 2000); // Wait 2 seconds after last interim result
+          
+          setSpeechTimeout(timeout);
         }
       };
 
@@ -221,6 +254,9 @@ export default function TalkPage() {
       }
       if (timerRef.current) {
         clearInterval(timerRef.current);
+      }
+      if (speechTimeout) {
+        clearTimeout(speechTimeout);
       }
       if (userVideoStream) {
         userVideoStream.getTracks().forEach(track => track.stop());
@@ -513,6 +549,11 @@ export default function TalkPage() {
                   {micEnabled && (
                     <div className="mt-2 flex justify-center">
                       <div className={`w-3 h-3 rounded-full ${isListening ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
+                    </div>
+                  )}
+                  {interimTranscript && (
+                    <div className="mt-2 text-sm text-white bg-black bg-opacity-30 px-2 py-1 rounded">
+                      "{interimTranscript}"
                     </div>
                   )}
                 </div>
