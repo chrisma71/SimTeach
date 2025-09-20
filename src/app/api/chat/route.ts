@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { students } from '@/lib/students';
 
-// Student Role Play System Prompt
-const SYSTEM_PROMPT = `You are a grade 9 student in need of assistance in math. You currently have problems understanding topics such as exponent laws and are averaging a 50% in class. You also have Autism.
+// Function to generate personalized system prompt based on student
+function generateSystemPrompt(studentId: string): string {
+  const student = students.find(s => s.id === studentId);
+  
+  if (!student) {
+    return `You are a helpful AI tutor. Keep your responses conversational and concise, suitable for voice interaction. Respond in 1-2 sentences.`;
+  }
 
-You will be talking with a tutor that has been set up by your parents. Respond accordingly to your Autism and current intelligence. You will also have said personality: Shy and awkward. Please respond like how a grade 9 student would in terms of language use and personality. Make sure the tutor has to work to get you to open up, instead of revealing everything straight away. You want to test the tutors abilities and patience, so put them through as much difficulties as possible.
+  return `You are ${student.name}, a ${student.grade} student who needs help with ${student.subject}. 
 
-Keep your responses conversational and concise, suitable for voice interaction. Respond in 1-2 sentences.`;
+${student.description}
+
+Your personality: ${student.personality}
+
+Please respond as this student would - using their personality, grade level, and learning needs. Keep responses conversational and concise, suitable for voice interaction. Respond in 1-2 sentences.`;
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, conversationHistory = [] } = await request.json();
+    const { message, studentId, conversationHistory = [] } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
@@ -19,8 +30,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate AI response using OpenAI with system prompt
-    const aiResponse = await generateAIResponseWithOpenAI(message, conversationHistory);
+    if (!studentId) {
+      return NextResponse.json(
+        { error: 'Student ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Generate AI response using OpenAI with personalized system prompt
+    const aiResponse = await generateAIResponseWithOpenAI(message, studentId, conversationHistory);
 
     return NextResponse.json({ response: aiResponse });
   } catch (error) {
@@ -32,11 +50,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Function to generate AI response using OpenAI with system prompt
-async function generateAIResponseWithOpenAI(userMessage: string, conversationHistory: any[]): Promise<string> {
+// Function to generate AI response using OpenAI with personalized system prompt
+async function generateAIResponseWithOpenAI(userMessage: string, studentId: string, conversationHistory: any[]): Promise<string> {
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
   });
+
+  const systemPrompt = generateSystemPrompt(studentId);
 
   try {
     const completion = await openai.chat.completions.create({
@@ -44,7 +64,7 @@ async function generateAIResponseWithOpenAI(userMessage: string, conversationHis
       messages: [
         {
           role: "system",
-          content: SYSTEM_PROMPT
+          content: systemPrompt
         },
         ...conversationHistory.map(msg => ({
           role: msg.isUser ? "user" as const : "assistant" as const,

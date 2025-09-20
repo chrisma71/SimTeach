@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useProfiles } from '@/hooks/useProfiles';
+import { useProfiles } from '@/contexts/ProfileContext';
 import Link from 'next/link';
 
 interface Message {
@@ -12,7 +12,7 @@ interface Message {
 }
 
 export default function TalkPage() {
-  const { activeProfile } = useProfiles();
+  const { activeProfile, isLoading } = useProfiles();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -170,47 +170,16 @@ export default function TalkPage() {
       };
 
       recognitionRef.current.onresult = async (event) => {
-        let finalTranscript = '';
-        let interimText = '';
-        
-        // Process all results
+        // Only process final results, not interim ones
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
           if (result.isFinal) {
-            finalTranscript += result[0].transcript;
-          } else {
-            interimText += result[0].transcript;
-          }
-        }
-        
-        // Update interim transcript for display
-        setInterimTranscript(interimText);
-        
-        // If we have final results, process them
-        if (finalTranscript.trim()) {
-          // Clear any existing timeout
-          if (speechTimeout) {
-            clearTimeout(speechTimeout);
-            setSpeechTimeout(null);
-          }
-          
-          setHasUserSpoken(true);
-          await handleUserMessage(finalTranscript);
-        } else if (interimText.trim()) {
-          // If we have interim results, set a timeout to process them if no more speech comes
-          if (speechTimeout) {
-            clearTimeout(speechTimeout);
-          }
-          
-          const timeout = setTimeout(async () => {
-            if (interimText.trim()) {
+            const transcript = result[0].transcript;
+            if (transcript.trim()) {
               setHasUserSpoken(true);
-              await handleUserMessage(interimText);
-              setInterimTranscript('');
+              await handleUserMessage(transcript);
             }
-          }, 2000); // Wait 2 seconds after last interim result
-          
-          setSpeechTimeout(timeout);
+          }
         }
       };
 
@@ -511,6 +480,18 @@ export default function TalkPage() {
     setAudioLevels(new Array(8).fill(0));
   };
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">Loading Profile...</h1>
+          <p className="text-gray-600">Please wait while we load your student profile.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!activeProfile) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -538,12 +519,28 @@ export default function TalkPage() {
             {/* AI Panel (Left) */}
             <div className="flex-1 m-4 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg flex items-center justify-center relative">
               <div className="text-center text-white">
-                <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <p className="text-lg font-medium">AI Assistant</p>
+                {activeProfile ? (
+                  <>
+                    <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4 overflow-hidden">
+                      <img 
+                        src={activeProfile.thumbnail} 
+                        alt={activeProfile.name}
+                        className="w-full h-full object-cover rounded-full"
+                      />
+                    </div>
+                    <p className="text-lg font-medium">{activeProfile.name}</p>
+                    <p className="text-sm opacity-80">{activeProfile.grade} • {activeProfile.subject}</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-lg font-medium">AI Assistant</p>
+                  </>
+                )}
                 {(isSpeaking || isProcessing) && (
                   <div className="mt-2 flex justify-center">
                     <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
