@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useProfiles } from '@/contexts/ProfileContext';
 import Link from 'next/link';
+import { ChatLog } from '@/types/chatLog';
 
 interface Message {
   id: string;
@@ -30,6 +31,8 @@ export default function TalkPage() {
   const [speechTimeout, setSpeechTimeout] = useState<NodeJS.Timeout | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [maxRetries] = useState(3);
+  const [userId] = useState(() => `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+  const [hasLoggedSession, setHasLoggedSession] = useState(false);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -175,6 +178,19 @@ export default function TalkPage() {
 
       recognitionRef.current.onresult = async (event) => {
         console.log('Speech recognition result event:', event);
+        
+        // Don't process speech recognition results if AI is speaking or processing
+        if (isSpeaking || isProcessing) {
+          console.log('Ignoring speech recognition - AI is speaking or processing');
+          return;
+        }
+        
+        // Additional check: if microphone is not enabled, ignore results
+        if (!micEnabled) {
+          console.log('Ignoring speech recognition - microphone not enabled');
+          return;
+        }
+        
         // Only process final results, not interim ones
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
@@ -183,6 +199,12 @@ export default function TalkPage() {
             const transcript = result[0].transcript;
             console.log('Final transcript:', transcript);
             if (transcript.trim()) {
+              // Final check before processing
+              if (isSpeaking || isProcessing || !micEnabled) {
+                console.log('Ignoring final transcript - AI is speaking, processing, or mic disabled');
+                return;
+              }
+              
               setHasUserSpoken(true);
               setInterimTranscript('');
               console.log('Calling handleUserMessage with:', transcript);
@@ -240,7 +262,7 @@ export default function TalkPage() {
         // Restart recognition if microphone is enabled and we're not processing/speaking
         if (micEnabled && !isProcessing && !isSpeaking) {
           setTimeout(() => {
-            if (recognitionRef.current && micEnabled && !isListening) {
+            if (recognitionRef.current && micEnabled && !isListening && !isSpeaking && !isProcessing) {
               try {
                 recognitionRef.current.start();
               } catch (err) {
@@ -290,6 +312,39 @@ export default function TalkPage() {
       console.log(`Profile loaded: ${activeProfile.name} - ${activeProfile.subject} - ID: ${activeProfile.id}`);
     }
   }, [activeProfile, isLoading]);
+
+  // Handle page exit - log chat session before leaving
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasLoggedSession && activeProfile && messages.length > 0) {
+        // Use sendBeacon for more reliable logging on page exit
+        const data = JSON.stringify({
+          userId,
+          studentId: activeProfile.id,
+          studentName: activeProfile.name,
+          studentSubject: activeProfile.subject,
+          transcript: messages,
+          conversationLength: callDuration
+        });
+        
+        navigator.sendBeacon('/api/chat/log', data);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && !hasLoggedSession && activeProfile && messages.length > 0) {
+        logChatSession();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [hasLoggedSession, activeProfile, messages, callDuration, userId]);
 
   const toggleCamera = async () => {
     if (cameraEnabled) {
@@ -359,12 +414,20 @@ export default function TalkPage() {
     
     setMessages(prev => [...prev, userMessage]);
     
-    // Turn off microphone immediately after user message is registered
+    // Aggressively turn off microphone and stop speech recognition
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.log('Error stopping speech recognition in handleUserMessage:', err);
+      }
+    }
     turnMicOff();
     
     setIsProcessing(true);
     
     // Ensure microphone stays off during processing and speaking
+    // This is redundant but ensures mic is definitely off
     if (micEnabled) {
       turnMicOff();
     }
@@ -418,6 +481,11 @@ export default function TalkPage() {
     if (synthRef.current) {
       setIsSpeaking(true);
       
+      // Completely stop speech recognition when AI starts speaking
+      if (recognitionRef.current && isListening) {
+        recognitionRef.current.stop();
+      }
+      
       // Ensure microphone is off when AI starts speaking
       if (micEnabled) {
         turnMicOff();
@@ -428,21 +496,33 @@ export default function TalkPage() {
       utterance.pitch = 1;
       utterance.volume = 1;
       
+      utterance.onstart = () => {
+        // Double-check that speech recognition is stopped when AI starts speaking
+        if (recognitionRef.current && isListening) {
+          recognitionRef.current.stop();
+        }
+      };
+      
       utterance.onend = () => {
         setIsSpeaking(false);
         // Turn microphone back on after AI finishes speaking
-        if (!micEnabled) {
-          turnMicOn();
-        }
+        // Add a small delay to prevent immediate re-activation
+        setTimeout(() => {
+          if (!micEnabled) {
+            turnMicOn();
+          }
+        }, 1000); // Increased delay to 1 second
       };
       
       utterance.onerror = (event) => {
         console.error('Speech synthesis error:', event.error);
         setIsSpeaking(false);
         // Turn microphone back on even on error
-        if (!micEnabled) {
-          turnMicOn();
-        }
+        setTimeout(() => {
+          if (!micEnabled) {
+            turnMicOn();
+          }
+        }, 1000);
       };
       
       synthRef.current.speak(utterance);
@@ -450,8 +530,12 @@ export default function TalkPage() {
   };
 
   const turnMicOff = () => {
-    if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.log('Error stopping speech recognition:', err);
+      }
     }
     stopAudioAnalysis();
     setMicEnabled(false);
@@ -537,7 +621,44 @@ export default function TalkPage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const endCall = () => {
+  const logChatSession = async () => {
+    if (hasLoggedSession || !activeProfile || messages.length === 0) {
+      return;
+    }
+
+    try {
+      setHasLoggedSession(true);
+      
+      const response = await fetch('/api/chat/log', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId,
+          studentId: activeProfile.id,
+          studentName: activeProfile.name,
+          studentSubject: activeProfile.subject,
+          transcript: messages,
+          conversationLength: callDuration
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Chat session logged successfully:', data);
+      } else {
+        console.error('Failed to log chat session');
+      }
+    } catch (error) {
+      console.error('Error logging chat session:', error);
+    }
+  };
+
+  const endCall = async () => {
+    // Log the chat session before ending
+    await logChatSession();
+    
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
