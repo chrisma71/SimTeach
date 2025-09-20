@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Navbar from "@/components/navbar";
+import { ProfileProvider } from "@/contexts/ProfileContext";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -24,10 +26,16 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <script type="module" src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.esm.js"></script>
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <ProfileProvider>
+          <Navbar />
+          {children}
+        </ProfileProvider>
       </body>
     </html>
   );

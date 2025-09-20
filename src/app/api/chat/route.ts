@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { students } from '@/lib/students';
 
-// Student Role Play System Prompt
-const SYSTEM_PROMPT = `You are a grade 9 student in need of assistance in math. You currently have problems understanding topics such as exponent laws and are averaging a 50% in class. You also have Autism.
+// Function to generate personalized system prompt based on student
+function generateSystemPrompt(student: any): string {
+  return `You are ${student.name}, a ${student.age}-year-old student in grade ${student.grade} who needs assistance in ${student.subject}. You are currently averaging ${student.averageGrade} in class and have the following personality: ${student.personality}.
 
-You will be talking with a tutor that has been set up by your parents. Respond accordingly to your Autism and current intelligence. You will also have said personality: Shy and awkward. Please respond like how a grade 9 student would in terms of language use and personality. Make sure the tutor has to work to get you to open up, instead of revealing everything straight away. You want to test the tutors abilities and patience, so put them through as much difficulties as possible.
+You struggle with: ${student.struggles.join(', ')}.
+Your strengths are: ${student.strengths.join(', ')}.
+
+You will be talking with a tutor that has been set up to help you. Respond according to your personality and current academic level. Please respond like how a grade ${student.grade} student would in terms of language use and personality. Make sure the tutor has to work to get you to open up and understand your needs. You want to test the tutor's abilities and patience, so put them through challenges appropriate to your personality and learning style.
 
 Keep your responses conversational and concise, suitable for voice interaction. Respond in 1-2 sentences.`;
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, conversationHistory = [] } = await request.json();
+    const { message, conversationHistory = [], studentId } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
@@ -19,8 +25,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate AI response using OpenAI with system prompt
-    const aiResponse = await generateAIResponseWithOpenAI(message, conversationHistory);
+    if (!studentId) {
+      return NextResponse.json(
+        { error: 'Student ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Find the student by ID
+    const student = students.find(s => s.id === studentId);
+    if (!student) {
+      return NextResponse.json(
+        { error: 'Student not found' },
+        { status: 404 }
+      );
+    }
+
+    // Generate personalized system prompt
+    const systemPrompt = generateSystemPrompt(student);
+
+    // Generate AI response using OpenAI with personalized system prompt
+    const aiResponse = await generateAIResponseWithOpenAI(message, conversationHistory, systemPrompt);
 
     return NextResponse.json({ response: aiResponse });
   } catch (error) {
@@ -32,8 +57,8 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Function to generate AI response using OpenAI with system prompt
-async function generateAIResponseWithOpenAI(userMessage: string, conversationHistory: any[]): Promise<string> {
+// Function to generate AI response using OpenAI with personalized system prompt
+async function generateAIResponseWithOpenAI(userMessage: string, conversationHistory: any[], systemPrompt: string): Promise<string> {
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
   });
@@ -44,7 +69,7 @@ async function generateAIResponseWithOpenAI(userMessage: string, conversationHis
       messages: [
         {
           role: "system",
-          content: SYSTEM_PROMPT
+          content: systemPrompt
         },
         ...conversationHistory.map(msg => ({
           role: msg.isUser ? "user" as const : "assistant" as const,
