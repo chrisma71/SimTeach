@@ -195,14 +195,12 @@ export default function TavusVideoChat({ student, onCallEnd, onCallStart }: Tavu
           </div>
         )}
 
-        {/* Development info */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 text-yellow-800 rounded-lg text-xs max-w-md">
-            <p className="font-medium">Development Mode</p>
-            <p>Student ID: {student.id}</p>
-            <p>Make sure your Tavus API keys are configured in .env.local</p>
-          </div>
-        )}
+        <button
+          onClick={onCallEnd}
+          className="mt-4 text-gray-500 hover:text-gray-700 underline"
+        >
+          Back to Student Selection
+        </button>
       </div>
     );
   }
