@@ -14,7 +14,6 @@ export async function syncUserToMongoDB(auth0User: any): Promise<User> {
       email: auth0User.email,
       username: auth0User.nickname || auth0User.name || auth0User.email,
       name: auth0User.name,
-      institution: auth0User.user_metadata?.institution || auth0User['https://your-app.com/institution'] || '',
       profilePicture: auth0User.picture,
       isEmailVerified: auth0User.email_verified || false,
     };
@@ -31,7 +30,6 @@ export async function syncUserToMongoDB(auth0User: any): Promise<User> {
             email: userData.email,
             username: userData.username,
             name: userData.name,
-            institution: userData.institution,
             profilePicture: userData.profilePicture,
             isEmailVerified: userData.isEmailVerified,
             lastLoginAt: new Date(),

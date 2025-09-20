@@ -9,8 +9,7 @@ export default function SignupPage() {
   const [formData, setFormData] = useState({
     email: '',
     username: '',
-    password: '',
-    institution: ''
+    password: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -125,21 +124,6 @@ export default function SignupPage() {
               />
             </div>
 
-            <div>
-              <label htmlFor="institution" className="block text-sm font-medium text-gray-700">
-                Institution
-              </label>
-              <input
-                id="institution"
-                name="institution"
-                type="text"
-                required
-                value={formData.institution}
-                onChange={handleChange}
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="Your school or organization"
-              />
-            </div>
           </div>
 
           <div>

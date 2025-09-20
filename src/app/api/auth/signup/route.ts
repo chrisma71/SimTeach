@@ -3,10 +3,10 @@ import { syncUserToMongoDB } from '@/lib/user-sync';
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, username, password, institution } = await req.json();
+    const { email, username, password } = await req.json();
 
     // Validate required fields
-    if (!email || !username || !password || !institution) {
+    if (!email || !username || !password) {
       return NextResponse.json(
         { error: 'All fields are required' },
         { status: 400 }
@@ -26,9 +26,6 @@ export async function POST(req: NextRequest) {
         username,
         password,
         connection: 'Username-Password-Authentication',
-        user_metadata: {
-          institution,
-        },
       }),
     });
 
@@ -50,9 +47,6 @@ export async function POST(req: NextRequest) {
         email: email,
         nickname: username,
         name: username,
-        user_metadata: {
-          institution: institution,
-        },
         email_verified: false,
       };
 

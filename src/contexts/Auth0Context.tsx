@@ -23,11 +23,6 @@ export function Auth0Provider({ children }: { children: ReactNode }) {
         if (response.ok) {
           const userData = await response.json();
           setUser(userData);
-          
-          // Redirect to complete profile if user doesn't have institution
-          if (userData && !userData.institution && window.location.pathname !== '/complete-profile') {
-            window.location.href = '/complete-profile';
-          }
         }
       } catch (error) {
         console.error('Session check error:', error);
@@ -47,11 +42,6 @@ export function Auth0Provider({ children }: { children: ReactNode }) {
         if (response.ok) {
           const userData = await response.json();
           setUser(userData);
-          
-          // Redirect to complete profile if user doesn't have institution
-          if (userData && !userData.institution && window.location.pathname !== '/complete-profile') {
-            window.location.href = '/complete-profile';
-          }
         }
       } catch (error) {
         console.error('Session check error:', error);

@@ -3,7 +3,6 @@ export interface User {
   email: string;
   username: string;
   name?: string;
-  institution: string;
   profilePicture?: string;
   isEmailVerified: boolean;
   lastLoginAt?: Date;
@@ -16,7 +15,6 @@ export interface CreateUserData {
   email: string;
   username: string;
   name?: string;
-  institution: string;
   profilePicture?: string;
   isEmailVerified: boolean;
 }

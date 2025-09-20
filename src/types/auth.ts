@@ -19,7 +19,6 @@ export interface SignupData {
   email: string;
   username: string;
   password: string;
-  institution: string;
 }
 
 export interface LoginData {

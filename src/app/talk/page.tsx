@@ -40,6 +40,9 @@ export default function TalkPage() {
   const [maxRetries] = useState(3);
   const [hasLoggedSession, setHasLoggedSession] = useState(false);
   const [lastSpeechTime, setLastSpeechTime] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioRecorder, setAudioRecorder] = useState<MediaRecorder | null>(null);
+  const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -670,6 +673,12 @@ export default function TalkPage() {
     console.log('turnMicOn called - enabling microphone');
     setMicEnabled(true);
     await initializeAudioAnalysis();
+    
+    // Start audio recording when first turning on mic (if not already recording)
+    if (!isRecording) {
+      await startAudioRecording();
+    }
+    
     if (recognitionRef.current) {
       try {
         recognitionRef.current.start();
@@ -745,9 +754,72 @@ export default function TalkPage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const startAudioRecording = async () => {
+    try {
+      console.log('Attempting to start audio recording...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      
+      recorder.ondataavailable = (event) => {
+        console.log('Audio data available, size:', event.data.size);
+        if (event.data.size > 0) {
+          setAudioChunks(prev => {
+            const newChunks = [...prev, event.data];
+            console.log('Total audio chunks:', newChunks.length);
+            return newChunks;
+          });
+        }
+      };
+      
+      recorder.onstart = () => {
+        console.log('MediaRecorder started');
+      };
+      
+      recorder.onstop = () => {
+        console.log('MediaRecorder stopped');
+      };
+      
+      recorder.start(1000); // Record in 1-second chunks
+      setAudioRecorder(recorder);
+      setIsRecording(true);
+      console.log('Audio recording started successfully');
+    } catch (error) {
+      console.error('Error starting audio recording:', error);
+      setError('Could not start audio recording');
+    }
+  };
+
+  const stopAudioRecording = (): Promise<void> => {
+    return new Promise((resolve) => {
+      if (audioRecorder && audioRecorder.state !== 'inactive') {
+        console.log('Stopping audio recording...');
+        
+        audioRecorder.onstop = () => {
+          console.log('Audio recording stopped, total chunks:', audioChunks.length);
+          audioRecorder.stream.getTracks().forEach(track => track.stop());
+          setIsRecording(false);
+          resolve();
+        };
+        
+        audioRecorder.stop();
+      } else {
+        setIsRecording(false);
+        resolve();
+      }
+    });
+  };
+
+  const getAudioBlob = (): Blob | null => {
+    if (audioChunks.length > 0) {
+      return new Blob(audioChunks, { type: 'audio/webm' });
+    }
+    return null;
+  };
+
   const logChatSession = async () => {
     if (hasLoggedSession || !activeProfile || messages.length === 0 || !user) {
-      return;
+      console.log('Early return from logChatSession:', { hasLoggedSession, activeProfile: !!activeProfile, messageCount: messages.length });
+      return { success: false };
     }
 
     try {
@@ -771,35 +843,38 @@ export default function TalkPage() {
       if (response.ok) {
         const data = await response.json();
         console.log('Chat session logged successfully:', data);
-        setSuccessMessage('Chat session saved successfully!');
-        setTimeout(() => setSuccessMessage(null), 3000); // Auto-dismiss after 3 seconds
-        return true; // Return success status
+        return { success: true, caseId: data.id }; // Return success status with case ID
       } else {
-        const errorData = await response.json();
-        console.error('Failed to log chat session:', errorData);
-        setError(`Failed to save chat session: ${errorData.error || 'Unknown error'}`);
-        return false;
+        console.error('Failed to log chat session');
+        return { success: false };
       }
     } catch (error) {
       console.error('Error logging chat session:', error);
-      setError(`Failed to save chat session: ${error instanceof Error ? error.message : 'Network error'}`);
-      return false;
+      return { success: false };
     }
   };
 
   const endCall = async () => {
-    console.log('Ending call - starting cleanup');
+    // Show loading state
+    setIsProcessing(true);
+    setError("Ending session and generating feedback...");
     
-    // Immediately stop all speech synthesis
-    stopAllSpeech();
+    // Prevent beforeunload handler from interfering
+    setHasLoggedSession(true);
     
-    // Stop speech recognition immediately
+    // Stop all audio/speech immediately and clean up handlers
     if (recognitionRef.current) {
-      console.log('Stopping speech recognition');
+      recognitionRef.current.onresult = null;
+      recognitionRef.current.onerror = null;
+      recognitionRef.current.onend = null;
       recognitionRef.current.stop();
     }
-    
-    // Stop timer immediately
+    if (synthRef.current) {
+      synthRef.current.cancel();
+    }
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel(); // Additional stop for speech synthesis
+    }
     if (timerRef.current) {
       console.log('Clearing timer');
       clearInterval(timerRef.current);
@@ -809,22 +884,9 @@ export default function TalkPage() {
     // Stop audio analysis immediately (this now includes microphone stream cleanup)
     console.log('Stopping audio analysis and microphone stream');
     stopAudioAnalysis();
-    
-    // Stop user video stream if active
-    if (userVideoStream) {
-      console.log('Stopping user video stream');
-      userVideoStream.getTracks().forEach(track => {
-        track.stop();
-        console.log('Video track stopped');
-      });
-      setUserVideoStream(null);
-    }
-    
-    // Reset all states immediately
-    console.log('Resetting all states');
+    await stopAudioRecording(); // Stop audio recording and wait for completion
     setIsListening(false);
     setIsSpeaking(false);
-    setIsProcessing(false);
     setMicEnabled(false);
     setCameraEnabled(false);
     setAudioLevels(new Array(8).fill(0));
@@ -832,29 +894,75 @@ export default function TalkPage() {
     setInterimTranscript('');
     setWebcamError(null);
     
-    // Clear all refs
-    recognitionRef.current = null;
-    synthRef.current = null;
-    timerRef.current = null;
-    analyserRef.current = null;
-    microphoneRef.current = null;
-    microphoneStreamRef.current = null;
-    audioContextRef.current = null;
-    
-    console.log('Cleanup complete, logging session...');
+    // Log the chat session manually since we bypassed logChatSession's early return
+    if (!activeProfile || messages.length === 0) {
+      console.log('No data to log, redirecting to home');
+      setError(null);
+      setIsProcessing(false);
+      router.push('/');
+      return;
+    }
 
-    // Log the chat session after stopping everything
-    const logged = await logChatSession();
+    try {
+      setError("Saving conversation...");
+      
+      // Convert audio to base64 if available
+      let audioData = null;
+      const audioBlob = getAudioBlob();
+      console.log('Audio blob:', audioBlob, 'Chunks:', audioChunks.length);
+      if (audioBlob) {
+        setError("Processing audio recording...");
+        audioData = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            console.log('Audio data processed, size:', (reader.result as string).length);
+            resolve(reader.result as string);
+          };
+          reader.readAsDataURL(audioBlob);
+        });
+      } else {
+        console.log('No audio blob available');
+      }
+      
+      const response = await fetch('/api/chat/log', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user?._id,
+          studentId: activeProfile.id,
+          studentName: activeProfile.name,
+          studentSubject: activeProfile.subject,
+          transcript: messages,
+          conversationLength: callDuration,
+          audioData: audioData
+        }),
+      });
 
-    console.log('Session logged, cleaning up globally...');
-
-    // Global cleanup to ensure all audio resources are released
-    cleanupAllAudioResources();
-
-    console.log('Global cleanup complete, redirecting to homepage');
-
-    // Redirect to homepage after logging is complete
-    router.push('/');
+      if (response.ok) {
+        const data = await response.json();
+        setError("Generating AI feedback...");
+        console.log('Chat session logged successfully, redirecting to:', `/review/${data.sessionId}`);
+        
+        // Small delay to show the feedback generation message
+        setTimeout(() => {
+          router.push(`/review/${data.sessionId}`);
+        }, 1000);
+      } else {
+        console.error('Failed to log chat session, redirecting to home');
+        setError('Failed to save session');
+        setTimeout(() => {
+          router.push('/');
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Error logging chat session:', error);
+      setError('Error saving session');
+      setTimeout(() => {
+        router.push('/');
+      }, 2000);
+    }
   };
 
   // Check authentication
@@ -1087,59 +1195,54 @@ export default function TalkPage() {
                     <div className={`w-3 h-3 rounded-full ${cameraEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
                     <span>Camera</span>
                   </div>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-gray-300'}`}></div>
+                    <span>Recording</span>
+                  </div>
                 </>
               )}
             </div>
           </div>
 
-          {/* Success Message */}
-          {successMessage && (
-            <div className="px-6 py-3 bg-green-100 border-l-4 border-green-500 text-green-700">
-              <div className="flex items-center justify-between">
-                <p className="text-sm flex-1">{successMessage}</p>
-                <button
-                  onClick={() => setSuccessMessage(null)}
-                  className="px-2 py-1 text-green-600 hover:text-green-800 transition-colors"
-                  title="Dismiss message"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Error Message */}
+          {/* Error/Status Message */}
           {error && (
-            <div className="px-6 py-3 bg-red-100 border-l-4 border-red-500 text-red-700">
+            <div className={`px-6 py-3 border-l-4 ${
+              error.includes('Ending session') || error.includes('Saving') || error.includes('Generating') 
+                ? 'bg-blue-100 border-blue-500 text-blue-700' 
+                : 'bg-red-100 border-red-500 text-red-700'
+            }`}>
               <div className="flex items-center justify-between">
-                <p className="text-sm flex-1">{error}</p>
-                <div className="flex items-center space-x-2 ml-4">
-                  {error.includes('Speech recognition') && retryCount < maxRetries && (
-                    <button
-                      onClick={() => {
-                        setError(null);
-                        setRetryCount(0);
-                        if (micEnabled && recognitionRef.current) {
-                          try {
-                            recognitionRef.current.start();
-                          } catch (err) {
-                            console.log('Manual retry failed:', err);
-                          }
+                <div className="flex items-center">
+                  {(error.includes('Ending session') || error.includes('Saving') || error.includes('Generating')) && (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
+                  )}
+                  <p className="text-sm">{error}</p>
+                </div>
+                {error.includes('Speech recognition') && retryCount < maxRetries && (
+                  <button
+                    onClick={() => {
+                      setError(null);
+                      setRetryCount(0);
+                      if (micEnabled && recognitionRef.current) {
+                        try {
+                          recognitionRef.current.start();
+                        } catch (err) {
+                          console.log('Manual retry failed:', err);
                         }
-                      }}
-                      className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
-                    >
+                      }
+                    }}
+                    className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                  >
                       Retry
                     </button>
                   )}
-                  <button
-                    onClick={() => setError(null)}
-                    className="px-2 py-1 text-red-600 hover:text-red-800 transition-colors"
-                    title="Dismiss error"
-                  >
-                    ✕
-                  </button>
-                </div>
+                <button
+                  onClick={() => setError(null)}
+                  className="px-2 py-1 text-red-600 hover:text-red-800 transition-colors"
+                  title="Dismiss error"
+                >
+                  ✕
+                </button>
               </div>
             </div>
           )}
@@ -1182,7 +1285,7 @@ export default function TalkPage() {
                 </div>
               </div>
             )}
-          </div>
+                </div>
               </details>
             </div>
           )}

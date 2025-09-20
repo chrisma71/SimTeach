@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/mongodb';
-import { ChatLog } from '@/types/chatLog';
+import { ChatLog, Feedback } from '@/types/chatLog';
 import OpenAI from 'openai';
 import { ObjectId } from 'mongodb';
 
@@ -24,7 +24,8 @@ export async function POST(request: NextRequest) {
       studentName, 
       studentSubject, 
       transcript, 
-      conversationLength 
+      conversationLength,
+      audioData
     } = data;
 
     if (!userId || !studentId || !transcript) {
@@ -87,11 +88,45 @@ export async function POST(request: NextRequest) {
       transcript,
       conversationCount: conversationCount + 1,
       conversationLength,
+      audioUrl: audioData || undefined, // Store the base64 audio data
       createdAt: new Date(),
       endedAt: new Date()
     };
 
     const result = await chatLogsCollection.insertOne(chatLog);
+
+    // Generate feedback for the session asynchronously
+    try {
+      const feedbackResponse = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/feedback/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transcript,
+          studentName,
+          studentSubject,
+          conversationLength
+        }),
+      });
+
+      if (feedbackResponse.ok) {
+        const feedbackData = await feedbackResponse.json();
+        
+        // Update the chat log with feedback
+        await chatLogsCollection.updateOne(
+          { _id: result.insertedId },
+          { $set: { feedback: feedbackData.feedback } }
+        );
+        
+        console.log('Feedback generated and stored successfully');
+      } else {
+        console.error('Failed to generate feedback');
+      }
+    } catch (feedbackError) {
+      console.error('Error generating feedback:', feedbackError);
+      // Don't fail the main request if feedback generation fails
+    }
 
     // Generate session summary asynchronously
     console.log('Starting session summary generation for session:', result.insertedId.toString());
