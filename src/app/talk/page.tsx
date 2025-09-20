@@ -208,6 +208,12 @@ export default function TalkPage() {
       recognitionRef.current.onresult = async (event) => {
         console.log('Speech recognition result event:', event);
         
+        // If AI is speaking, immediately stop speech recognition to prevent interference
+        if (isSpeaking) {
+          console.log('AI is speaking - ignoring speech recognition results');
+          return;
+        }
+        
         // Check for interim results to detect interruption
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
@@ -340,35 +346,7 @@ export default function TalkPage() {
     };
   }, []);
 
-  // Handle dashboard student selection - separate from profile loading
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !isLoading) {
-      const selectedStudent = sessionStorage.getItem('selectedStudent');
-      if (selectedStudent) {
-        try {
-          const student = JSON.parse(selectedStudent);
-          console.log('Student selected from dashboard:', student);
-          console.log('Available students:', students.map(s => ({ id: s.id, name: s.name, subject: s.subject })));
-          
-          // Find the student in the profiles list and set as active
-          const profileStudent = students.find(s => s.id === student.id);
-          if (profileStudent) {
-            console.log('Setting active profile from dashboard selection:', profileStudent);
-            setActiveProfile(profileStudent);
-          } else {
-            console.warn('Student not found in profiles list:', student);
-            console.warn('Available student IDs:', students.map(s => s.id));
-          }
-          
-          // Clear the session storage after reading
-          sessionStorage.removeItem('selectedStudent');
-        } catch (err) {
-          console.error('Error parsing selected student:', err);
-          sessionStorage.removeItem('selectedStudent');
-        }
-      }
-    }
-  }, [isLoading, setActiveProfile]);
+  // Dashboard student selection is now handled in ProfileContext to prevent race conditions
 
   // Profile is loaded, ready for conversation
   useEffect(() => {
@@ -619,15 +597,22 @@ export default function TalkPage() {
       utterance.volume = 1;
       
       utterance.onstart = () => {
-        console.log('AI started speaking');
+        console.log('AI started speaking - microphone should be muted');
+        // Double-check microphone is off when AI actually starts speaking
+        if (isListening) {
+          console.log('Force stopping speech recognition during AI speech');
+          turnMicOff();
+        }
       };
       
       utterance.onend = () => {
         console.log('AI finished speaking');
         setIsSpeaking(false);
-        // Automatically turn microphone back on when AI finishes speaking
-        console.log('AI finished speaking - turning microphone back on');
-        turnMicOn();
+        // Add a small delay before turning microphone back on to prevent immediate feedback
+        setTimeout(() => {
+          console.log('AI finished speaking - turning microphone back on after delay');
+          turnMicOn();
+        }, 500); // 500ms delay
       };
       
       utterance.onerror = (event) => {
@@ -636,9 +621,11 @@ export default function TalkPage() {
           console.error('Speech synthesis error:', event.error);
         }
         setIsSpeaking(false);
-        // Automatically turn microphone back on when AI speech has an error
-        console.log('AI speech error - turning microphone back on');
-        turnMicOn();
+        // Add a small delay before turning microphone back on
+        setTimeout(() => {
+          console.log('AI speech error - turning microphone back on after delay');
+          turnMicOn();
+        }, 500); // 500ms delay
       };
       
       synthRef.current.speak(utterance);
@@ -647,19 +634,38 @@ export default function TalkPage() {
 
   const turnMicOff = () => {
     console.log('turnMicOff called - disabling microphone');
-    if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
+    
+    // Force stop speech recognition immediately
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+        console.log('Speech recognition stopped');
+      } catch (err) {
+        console.log('Error stopping speech recognition:', err);
+      }
     }
+    
+    // Stop audio analysis
     stopAudioAnalysis();
+    
+    // Update state
     setMicEnabled(false);
     setIsListening(false);
     setAudioLevels(new Array(8).fill(0));
+    setInterimTranscript(''); // Clear any interim transcript
+    
     console.log('Microphone disabled - micEnabled set to false');
   };
 
   const turnMicOn = async () => {
     // Only run on client side
     if (typeof window === 'undefined') return;
+    
+    // Don't turn on microphone if AI is currently speaking
+    if (isSpeaking) {
+      console.log('Cannot turn on microphone - AI is currently speaking');
+      return;
+    }
     
     console.log('turnMicOn called - enabling microphone');
     setMicEnabled(true);

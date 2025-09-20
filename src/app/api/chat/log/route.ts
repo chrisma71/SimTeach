@@ -94,6 +94,7 @@ export async function POST(request: NextRequest) {
     const result = await chatLogsCollection.insertOne(chatLog);
 
     // Generate session summary asynchronously
+    console.log('Starting session summary generation for session:', result.insertedId.toString());
     generateSessionSummary(result.insertedId.toString(), transcript, studentName, studentSubject)
       .catch(error => {
         console.error('Failed to generate session summary:', error);

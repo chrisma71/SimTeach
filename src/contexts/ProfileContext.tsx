@@ -16,10 +16,30 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [activeProfile, setActiveProfile] = useState<Student | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load saved profile from localStorage on mount
+  // Load saved profile from localStorage on mount, but prioritize sessionStorage for dashboard selections
   useEffect(() => {
-    const saved = localStorage.getItem('activeStudent');
+    // First check if there's a student selected from dashboard (sessionStorage)
+    const selectedStudent = sessionStorage.getItem('selectedStudent');
+    if (selectedStudent) {
+      try {
+        const student = JSON.parse(selectedStudent);
+        const profileStudent = students.find(s => s.id === student.id);
+        if (profileStudent) {
+          console.log('Loading student from dashboard selection:', profileStudent);
+          setActiveProfile(profileStudent);
+          // Clear sessionStorage after using it
+          sessionStorage.removeItem('selectedStudent');
+          setIsLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.error('Error parsing selected student from sessionStorage:', err);
+        sessionStorage.removeItem('selectedStudent');
+      }
+    }
     
+    // Fall back to localStorage if no dashboard selection
+    const saved = localStorage.getItem('activeStudent');
     if (saved) {
       const savedStudent = students.find(s => s.id === saved);
       if (savedStudent) {
