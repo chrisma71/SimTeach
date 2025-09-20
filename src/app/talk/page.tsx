@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useProfiles } from '@/contexts/ProfileContext';
+import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChatLog } from '@/types/chatLog';
@@ -15,6 +16,7 @@ interface Message {
 
 export default function TalkPage() {
   const { activeProfile, isLoading } = useProfiles();
+  const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
@@ -33,7 +35,6 @@ export default function TalkPage() {
   const [speechTimeout, setSpeechTimeout] = useState<NodeJS.Timeout | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [maxRetries] = useState(3);
-  const [userId] = useState(() => `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const [hasLoggedSession, setHasLoggedSession] = useState(false);
   const [lastSpeechTime, setLastSpeechTime] = useState(0);
   
@@ -327,10 +328,11 @@ export default function TalkPage() {
   // Handle page exit - log chat session before leaving
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!hasLoggedSession && activeProfile && messages.length > 0) {
+      if (!hasLoggedSession && activeProfile && messages.length > 0 && user) {
         // Use sendBeacon for more reliable logging on page exit
+        const token = localStorage.getItem('authToken');
         const data = JSON.stringify({
-          userId,
+          userId: user._id,
           studentId: activeProfile.id,
           studentName: activeProfile.name,
           studentSubject: activeProfile.subject,
@@ -343,7 +345,7 @@ export default function TalkPage() {
     };
 
     const handleVisibilityChange = () => {
-      if (document.hidden && !hasLoggedSession && activeProfile && messages.length > 0) {
+      if (document.hidden && !hasLoggedSession && activeProfile && messages.length > 0 && user) {
         logChatSession();
       }
     };
@@ -355,7 +357,7 @@ export default function TalkPage() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [hasLoggedSession, activeProfile, messages, callDuration, userId]);
+  }, [hasLoggedSession, activeProfile, messages, callDuration, user]);
 
   const toggleCamera = async () => {
     if (cameraEnabled) {
@@ -622,20 +624,22 @@ export default function TalkPage() {
   };
 
   const logChatSession = async () => {
-    if (hasLoggedSession || !activeProfile || messages.length === 0) {
+    if (hasLoggedSession || !activeProfile || messages.length === 0 || !user) {
       return;
     }
 
     try {
       setHasLoggedSession(true);
       
+      const token = localStorage.getItem('authToken');
       const response = await fetch('/api/chat/log', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          userId,
+          userId: user._id,
           studentId: activeProfile.id,
           studentName: activeProfile.name,
           studentSubject: activeProfile.subject,
@@ -686,6 +690,44 @@ export default function TalkPage() {
       router.push('/');
     }
   };
+
+  // Check authentication
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">Loading...</h1>
+          <p className="text-gray-600">Please wait while we load your session.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">Authentication Required</h1>
+          <p className="text-gray-600 mb-6">Please log in to start a tutoring session.</p>
+          <div className="space-x-4">
+            <Link 
+              href="/login"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors"
+            >
+              Login
+            </Link>
+            <Link 
+              href="/signup"
+              className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg transition-colors"
+            >
+              Sign Up
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
