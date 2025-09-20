@@ -35,6 +35,7 @@ export default function TalkPage() {
   const [maxRetries] = useState(3);
   const [userId] = useState(() => `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const [hasLoggedSession, setHasLoggedSession] = useState(false);
+  const [lastSpeechTime, setLastSpeechTime] = useState(0);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -59,6 +60,21 @@ export default function TalkPage() {
     
     if (hasAudio && !audioAnalysisWorking) {
       setAudioAnalysisWorking(true);
+    }
+
+    // Check for user speech activity to interrupt AI
+    if (hasAudio && isSpeaking && micEnabled) {
+      const currentTime = Date.now();
+      setLastSpeechTime(currentTime);
+      
+      // If we detect audio while AI is speaking, interrupt it
+      if (totalLevel > 50) { // Threshold for speech detection
+        console.log('Audio detected while AI speaking - interrupting');
+        if (synthRef.current) {
+          synthRef.current.cancel();
+          setIsSpeaking(false);
+        }
+      }
     }
 
     // Map frequency data to 8 bars with better frequency distribution
@@ -180,12 +196,24 @@ export default function TalkPage() {
 
       recognitionRef.current.onresult = async (event) => {
         console.log('Speech recognition result event:', event);
-        // Only process final results, not interim ones
+        
+        // Check for interim results to detect interruption
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
-          console.log('Speech result:', result, 'isFinal:', result.isFinal);
-          if (result.isFinal) {
-            const transcript = result[0].transcript;
+          const transcript = result[0].transcript;
+          console.log('Speech result:', result, 'isFinal:', result.isFinal, 'transcript:', transcript);
+          
+          if (!result.isFinal) {
+            // User is speaking (interim result) - stop AI if it's speaking
+            if (isSpeaking && synthRef.current && transcript.trim().length > 0) {
+              console.log('User interrupting AI - stopping speech synthesis');
+              synthRef.current.cancel();
+              setIsSpeaking(false);
+            }
+            // Show interim transcript
+            setInterimTranscript(transcript);
+          } else {
+            // Final result - process the message
             console.log('Final transcript:', transcript);
             if (transcript.trim()) {
               setHasUserSpoken(true);
@@ -387,6 +415,13 @@ export default function TalkPage() {
     
     console.log('handleUserMessage: Processing message for profile:', activeProfile.name);
 
+    // Stop AI speech if it's currently speaking (user interruption)
+    if (isSpeaking && synthRef.current) {
+      console.log('Stopping AI speech due to user interruption');
+      synthRef.current.cancel();
+      setIsSpeaking(false);
+    }
+
     // Add user message
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -454,6 +489,9 @@ export default function TalkPage() {
 
   const speakText = (text: string) => {
     if (synthRef.current) {
+      // Cancel any existing speech before starting new one
+      synthRef.current.cancel();
+      
       setIsSpeaking(true);
       
       // Ensure microphone is off when AI starts speaking
@@ -466,7 +504,12 @@ export default function TalkPage() {
       utterance.pitch = 1;
       utterance.volume = 1;
       
+      utterance.onstart = () => {
+        console.log('AI started speaking');
+      };
+      
       utterance.onend = () => {
+        console.log('AI finished speaking');
         setIsSpeaking(false);
         // Turn microphone back on after AI finishes speaking
         if (!micEnabled) {
@@ -475,7 +518,10 @@ export default function TalkPage() {
       };
       
       utterance.onerror = (event) => {
-        console.error('Speech synthesis error:', event.error);
+        // Don't log "interrupted" as an error since it's expected when user interrupts
+        if (event.error !== 'interrupted') {
+          console.error('Speech synthesis error:', event.error);
+        }
         setIsSpeaking(false);
         // Turn microphone back on even on error
         if (!micEnabled) {
