@@ -28,6 +28,8 @@ export default function TalkPage() {
   const [audioAnalysisWorking, setAudioAnalysisWorking] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
   const [speechTimeout, setSpeechTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [maxRetries] = useState(3);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -165,18 +167,25 @@ export default function TalkPage() {
       recognitionRef.current.lang = 'en-US';
 
       recognitionRef.current.onstart = () => {
+        console.log('Speech recognition started');
         setIsListening(true);
         setError(null);
+        setRetryCount(0); // Reset retry count on successful start
       };
 
       recognitionRef.current.onresult = async (event) => {
+        console.log('Speech recognition result event:', event);
         // Only process final results, not interim ones
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
+          console.log('Speech result:', result, 'isFinal:', result.isFinal);
           if (result.isFinal) {
             const transcript = result[0].transcript;
+            console.log('Final transcript:', transcript);
             if (transcript.trim()) {
               setHasUserSpoken(true);
+              setInterimTranscript('');
+              console.log('Calling handleUserMessage with:', transcript);
               await handleUserMessage(transcript);
             }
           }
@@ -185,8 +194,45 @@ export default function TalkPage() {
 
       recognitionRef.current.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
-        setError(`Speech recognition error: ${event.error}`);
+        
+        // Handle different error types
+        switch (event.error) {
+          case 'network':
+            setError('Network error: Please check your internet connection and try again.');
+            break;
+          case 'not-allowed':
+            setError('Microphone access denied. Please allow microphone access and refresh the page.');
+            break;
+          case 'no-speech':
+            setError('No speech detected. Please try speaking again.');
+            break;
+          case 'audio-capture':
+            setError('No microphone found. Please connect a microphone and try again.');
+            break;
+          case 'service-not-allowed':
+            setError('Speech recognition service not allowed. Please check your browser settings.');
+            break;
+          default:
+            setError(`Speech recognition error: ${event.error}. Please try again.`);
+        }
+        
         setIsListening(false);
+        
+        // Try to restart recognition after a delay for recoverable errors
+        if (['network', 'no-speech'].includes(event.error) && retryCount < maxRetries) {
+          setRetryCount(prev => prev + 1);
+          setTimeout(() => {
+            if (micEnabled && recognitionRef.current) {
+              try {
+                recognitionRef.current.start();
+              } catch (err) {
+                console.log('Failed to restart speech recognition:', err);
+              }
+            }
+          }, 2000 * (retryCount + 1)); // Exponential backoff
+        } else if (retryCount >= maxRetries) {
+          setError('Speech recognition failed after multiple attempts. Please refresh the page and try again.');
+        }
       };
 
       recognitionRef.current.onend = () => {
@@ -237,18 +283,13 @@ export default function TalkPage() {
     };
   }, []);
 
-  // Initialize with profile message
+  // Profile initialization - no automatic message
   useEffect(() => {
-    if (activeProfile && messages.length === 0) {
-      const welcomeMessage: Message = {
-        id: Date.now().toString(),
-        text: `Hi... I'm ${activeProfile.name}. My parents said you're going to help me with ${activeProfile.subject}...`,
-        isUser: false,
-        timestamp: new Date()
-      };
-      setMessages([welcomeMessage]);
+    // Profile is loaded, ready for conversation
+    if (!isLoading && activeProfile) {
+      console.log(`Profile loaded: ${activeProfile.name} - ${activeProfile.subject} - ID: ${activeProfile.id}`);
     }
-  }, [activeProfile, messages.length]);
+  }, [activeProfile, isLoading]);
 
   const toggleCamera = async () => {
     if (cameraEnabled) {
@@ -290,6 +331,24 @@ export default function TalkPage() {
   }, [userVideoStream]);
 
   const handleUserMessage = async (text: string) => {
+    console.log('handleUserMessage called with text:', text);
+    console.log('handleUserMessage - isLoading:', isLoading, 'activeProfile:', activeProfile);
+    
+    // Don't process messages while loading
+    if (isLoading) {
+      console.log('handleUserMessage: Still loading, ignoring message');
+      return;
+    }
+    
+    // Check if we have an active profile
+    if (!activeProfile?.id) {
+      console.log('handleUserMessage: No active profile, setting error');
+      setError('No student profile selected. Please select a student profile first.');
+      return;
+    }
+    
+    console.log('handleUserMessage: Processing message for profile:', activeProfile.name);
+
     // Add user message
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -311,6 +370,8 @@ export default function TalkPage() {
     }
 
     try {
+      console.log('Sending request with studentId:', activeProfile.id);
+      
       // Send to AI API with conversation history
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -319,13 +380,15 @@ export default function TalkPage() {
         },
         body: JSON.stringify({ 
           message: text,
-          studentId: activeProfile?.id,
+          studentId: activeProfile.id,
           conversationHistory: messages.slice(-10) // Send last 10 messages for context
         }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get AI response');
+        const errorData = await response.json();
+        console.error('API Error:', errorData);
+        throw new Error(`API Error: ${errorData.error || 'Failed to get AI response'}`);
       }
 
       const data = await response.json();
@@ -345,7 +408,7 @@ export default function TalkPage() {
       
     } catch (err) {
       console.error('Error getting AI response:', err);
-      setError('Failed to get AI response. Please try again.');
+      setError(`Failed to get AI response: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -415,8 +478,11 @@ export default function TalkPage() {
     // Only run on client side
     if (typeof window === 'undefined') return;
     
+    console.log('toggleMicrophone called, current micEnabled:', micEnabled);
+    
     if (micEnabled) {
       // Turn off microphone
+      console.log('Turning off microphone');
       if (recognitionRef.current && isListening) {
         recognitionRef.current.stop();
       }
@@ -426,14 +492,18 @@ export default function TalkPage() {
       setAudioLevels(new Array(8).fill(0));
     } else {
       // Turn on microphone
+      console.log('Turning on microphone');
       setMicEnabled(true);
       await initializeAudioAnalysis();
       if (recognitionRef.current) {
         try {
+          console.log('Starting speech recognition...');
           recognitionRef.current.start();
         } catch (err) {
           console.log('Speech recognition start failed:', err);
         }
+      } else {
+        console.log('recognitionRef.current is null');
       }
     }
   };
@@ -454,6 +524,11 @@ export default function TalkPage() {
     setMessages([]);
     setHasUserSpoken(false);
     setCallDuration(0);
+    setInterimTranscript('');
+    if (speechTimeout) {
+      clearTimeout(speechTimeout);
+      setSpeechTimeout(null);
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -519,28 +594,12 @@ export default function TalkPage() {
             {/* AI Panel (Left) */}
             <div className="flex-1 m-4 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg flex items-center justify-center relative">
               <div className="text-center text-white">
-                {activeProfile ? (
-                  <>
-                    <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4 overflow-hidden">
-                      <img 
-                        src={activeProfile.thumbnail} 
-                        alt={activeProfile.name}
-                        className="w-full h-full object-cover rounded-full"
-                      />
-                    </div>
-                    <p className="text-lg font-medium">{activeProfile.name}</p>
-                    <p className="text-sm opacity-80">{activeProfile.grade} • {activeProfile.subject}</p>
-                  </>
-                ) : (
-                  <>
-                    <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <p className="text-lg font-medium">AI Assistant</p>
-                  </>
-                )}
+                <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <p className="text-lg font-medium">AI Assistant</p>
                 {(isSpeaking || isProcessing) && (
                   <div className="mt-2 flex justify-center">
                     <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
@@ -603,7 +662,7 @@ export default function TalkPage() {
                 {/* Microphone Button */}
                 <button
                   onClick={toggleMicrophone}
-                  disabled={isProcessing || isSpeaking}
+                  disabled={isLoading || isProcessing || isSpeaking}
                   className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
                     micEnabled
                       ? 'bg-green-600 hover:bg-green-700 text-white'
@@ -626,10 +685,11 @@ export default function TalkPage() {
                 {/* Camera Toggle Button */}
                 <button
                   onClick={toggleCamera}
+                  disabled={isLoading}
                   className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
                     cameraEnabled
                       ? 'bg-green-600 hover:bg-green-700 text-white'
-                      : 'bg-gray-600 hover:bg-gray-700 text-white'
+                      : 'bg-gray-600 hover:bg-gray-700 text-white disabled:bg-gray-400 disabled:cursor-not-allowed'
                   }`}
                 >
                   {cameraEnabled ? (
@@ -653,10 +713,20 @@ export default function TalkPage() {
                   {formatTime(callDuration)}
                 </div>
 
+                {/* Clear Messages Button */}
+                <button
+                  onClick={clearMessages}
+                  disabled={isLoading}
+                  className="w-30 h-12 bg-gray-600 hover:bg-gray-700 text-white rounded-full flex items-center justify-center transition-all duration-200 px-4 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Clear Chat
+                </button>
+
                 {/* End Call Button */}
                 <button
                   onClick={endCall}
-                  className="w-30 h-12 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center transition-all duration-200 px-4"
+                  disabled={isLoading}
+                  className="w-30 h-12 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center transition-all duration-200 px-4 disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
                   End lesson
                 </button>
@@ -666,28 +736,52 @@ export default function TalkPage() {
             {/* Status Indicators */}
             <div className="flex justify-center space-x-8 mt-4 text-sm text-gray-600">
               <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${micEnabled ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                <span>Microphone</span>
+                <div className={`w-3 h-3 rounded-full ${isLoading ? 'bg-orange-500 animate-pulse' : (micEnabled ? 'bg-green-500' : 'bg-gray-300')}`}></div>
+                <span>{isLoading ? 'Loading Profile...' : 'Microphone'}</span>
               </div>
-              <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${isSpeaking ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
-                <span>Speaking</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${isProcessing ? 'bg-yellow-500' : 'bg-gray-300'}`}></div>
-                <span>Processing</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${cameraEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
-                <span>Camera</span>
-              </div>
+              {!isLoading && (
+                <>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${isSpeaking ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+                    <span>Speaking</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${isProcessing ? 'bg-yellow-500' : 'bg-gray-300'}`}></div>
+                    <span>Processing</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${cameraEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
+                    <span>Camera</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
           {/* Error Message */}
           {error && (
             <div className="px-6 py-3 bg-red-100 border-l-4 border-red-500 text-red-700">
-              <p className="text-sm">{error}</p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm">{error}</p>
+                {error.includes('Speech recognition') && retryCount < maxRetries && (
+                  <button
+                    onClick={() => {
+                      setError(null);
+                      setRetryCount(0);
+                      if (micEnabled && recognitionRef.current) {
+                        try {
+                          recognitionRef.current.start();
+                        } catch (err) {
+                          console.log('Manual retry failed:', err);
+                        }
+                      }
+                    }}
+                    className="ml-4 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
