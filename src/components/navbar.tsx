@@ -10,6 +10,8 @@ export default function Navbar() {
 
   const navItems = [
     { href: '/', label: 'Home' },
+    { href: '/talk', label: 'Voice Chat' },
+    { href: '/review', label: 'Review Cases' },
   ];
 
   if (isLoading) {
