@@ -15,18 +15,148 @@ export default function TalkPage() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [callDuration, setCallDuration] = useState(0);
+  const [hasUserSpoken, setHasUserSpoken] = useState(false);
+  const [userVideoStream, setUserVideoStream] = useState<MediaStream | null>(null);
+  const [webcamError, setWebcamError] = useState<string | null>(null);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [audioLevels, setAudioLevels] = useState<number[]>(() => new Array(8).fill(0));
+  const [audioAnalysisWorking, setAudioAnalysisWorking] = useState(false);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
+  // Audio analysis function
+  const analyzeAudio = () => {
+    if (!analyserRef.current) return;
+
+    const bufferLength = analyserRef.current.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyserRef.current.getByteFrequencyData(dataArray);
+
+    // Check if we're getting any audio data
+    const totalLevel = dataArray.reduce((sum, val) => sum + val, 0);
+    const hasAudio = totalLevel > 0;
+    
+    if (hasAudio && !audioAnalysisWorking) {
+      setAudioAnalysisWorking(true);
+    }
+
+    // Map frequency data to 8 bars with better frequency distribution
+    const newLevels = new Array(8).fill(0);
+    
+    // Use logarithmic distribution for better frequency representation
+    const freqBins = [0, 1, 2, 4, 8, 16, 32, 64]; // Frequency bin indices
+    
+    for (let i = 0; i < 8; i++) {
+      let sum = 0;
+      let count = 0;
+      
+      // Sample from specific frequency ranges
+      const startBin = Math.floor((freqBins[i] / 128) * bufferLength);
+      const endBin = Math.floor((freqBins[i + 1] ? (freqBins[i + 1] / 128) : 1) * bufferLength);
+      
+      for (let j = startBin; j < endBin && j < bufferLength; j++) {
+        sum += dataArray[j];
+        count++;
+      }
+      
+      if (count > 0) {
+        // Normalize and apply some boost for better visibility
+        newLevels[i] = Math.min((sum / count) / 255 * 3, 1);
+      }
+    }
+
+    setAudioLevels(prevLevels => 
+      prevLevels.map((prev, i) => 
+        prev * 0.6 + newLevels[i] * 0.4 // More responsive smoothing
+      )
+    );
+
+    animationFrameRef.current = requestAnimationFrame(analyzeAudio);
+  };
+
+  // Initialize audio context and analyser
+  const initializeAudioAnalysis = async () => {
+    // Only run on client side
+    if (typeof window === 'undefined') return;
+    
+    try {
+      // Don't initialize if already running
+      if (analyserRef.current && audioContextRef.current?.state === 'running') {
+        return;
+      }
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
+      // Resume audio context if it's suspended, or create new one if closed/doesn't exist
+      if (audioContextRef.current?.state === 'suspended') {
+        await audioContextRef.current.resume();
+      } else if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
+      
+      analyserRef.current.fftSize = 256;
+      analyserRef.current.smoothingTimeConstant = 0.3; // Less smoothing for more responsive bars
+      analyserRef.current.minDecibels = -90;
+      analyserRef.current.maxDecibels = -10;
+      
+      microphoneRef.current.connect(analyserRef.current);
+      
+      // Start analysis
+      analyzeAudio();
+    } catch (err) {
+      console.log('Audio analysis not available:', err);
+    }
+  };
+
+  // Stop audio analysis
+  const stopAudioAnalysis = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    if (microphoneRef.current) {
+      try {
+        microphoneRef.current.disconnect();
+      } catch (err) {
+        console.log('Microphone disconnect error:', err);
+      }
+      microphoneRef.current = null;
+    }
+    if (audioContextRef.current) {
+      try {
+        if (audioContextRef.current.state !== 'closed') {
+          audioContextRef.current.close();
+        }
+      } catch (err) {
+        console.log('AudioContext close error:', err);
+      }
+      audioContextRef.current = null;
+    }
+  };
 
   useEffect(() => {
+    // Only run on client side
+    if (typeof window === 'undefined') return;
+    
     // Initialize speech recognition
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
+      recognitionRef.current.continuous = true;
+      recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'en-US';
 
       recognitionRef.current.onstart = () => {
@@ -35,9 +165,16 @@ export default function TalkPage() {
       };
 
       recognitionRef.current.onresult = async (event) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript.trim()) {
-          await handleUserMessage(transcript);
+        // Only process final results, not interim ones
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            const transcript = result[0].transcript;
+            if (transcript.trim()) {
+              setHasUserSpoken(true);
+              await handleUserMessage(transcript);
+            }
+          }
         }
       };
 
@@ -49,6 +186,18 @@ export default function TalkPage() {
 
       recognitionRef.current.onend = () => {
         setIsListening(false);
+        // Restart recognition if microphone is enabled and we're not processing/speaking
+        if (micEnabled && !isProcessing && !isSpeaking) {
+          setTimeout(() => {
+            if (recognitionRef.current && micEnabled && !isListening) {
+              try {
+                recognitionRef.current.start();
+              } catch (err) {
+                console.log('Speech recognition restart failed:', err);
+              }
+            }
+          }, 100);
+        }
       };
     } else {
       setError('Speech recognition not supported in this browser');
@@ -57,13 +206,11 @@ export default function TalkPage() {
     // Initialize speech synthesis
     synthRef.current = window.speechSynthesis;
 
-    // Add welcome message
-    setMessages([{
-      id: '1',
-      text: 'Hello! I\'m your AI assistant. Click the microphone to start talking to me.',
-      isUser: false,
-      timestamp: new Date()
-    }]);
+    // Start call timer
+    timerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1);
+    }, 1000);
+
 
     return () => {
       if (recognitionRef.current) {
@@ -72,8 +219,54 @@ export default function TalkPage() {
       if (synthRef.current) {
         synthRef.current.cancel();
       }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      if (userVideoStream) {
+        userVideoStream.getTracks().forEach(track => track.stop());
+      }
+      stopAudioAnalysis();
     };
   }, []);
+
+  const toggleCamera = async () => {
+    if (cameraEnabled) {
+      // Turn off camera
+      if (userVideoStream) {
+        userVideoStream.getTracks().forEach(track => track.stop());
+        setUserVideoStream(null);
+      }
+      setCameraEnabled(false);
+      setWebcamError(null);
+    } else {
+      // Turn on camera
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: 320, height: 240 },
+          audio: false 
+        });
+        setUserVideoStream(stream);
+        setWebcamError(null);
+        setCameraEnabled(true);
+        
+        // Set the video source once the stream is available
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.log('Webcam access denied or not available:', err);
+        setWebcamError('Camera not available');
+        setCameraEnabled(false);
+      }
+    }
+  };
+
+  // Update video source when stream changes
+  useEffect(() => {
+    if (videoRef.current && userVideoStream) {
+      videoRef.current.srcObject = userVideoStream;
+    }
+  }, [userVideoStream]);
 
   const handleUserMessage = async (text: string) => {
     // Add user message
@@ -85,7 +278,16 @@ export default function TalkPage() {
     };
     
     setMessages(prev => [...prev, userMessage]);
+    
+    // Turn off microphone immediately after user message is registered
+    turnMicOff();
+    
     setIsProcessing(true);
+    
+    // Ensure microphone stays off during processing and speaking
+    if (micEnabled) {
+      turnMicOff();
+    }
 
     try {
       // Send to AI API with conversation history
@@ -131,6 +333,11 @@ export default function TalkPage() {
     if (synthRef.current) {
       setIsSpeaking(true);
       
+      // Ensure microphone is off when AI starts speaking
+      if (micEnabled) {
+        turnMicOff();
+      }
+      
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
       utterance.pitch = 1;
@@ -138,19 +345,79 @@ export default function TalkPage() {
       
       utterance.onend = () => {
         setIsSpeaking(false);
+        // Turn microphone back on after AI finishes speaking
+        if (!micEnabled) {
+          turnMicOn();
+        }
       };
       
       utterance.onerror = (event) => {
         console.error('Speech synthesis error:', event.error);
         setIsSpeaking(false);
+        // Turn microphone back on even on error
+        if (!micEnabled) {
+          turnMicOn();
+        }
       };
       
       synthRef.current.speak(utterance);
     }
   };
 
+  const turnMicOff = () => {
+    if (recognitionRef.current && isListening) {
+      recognitionRef.current.stop();
+    }
+    stopAudioAnalysis();
+    setMicEnabled(false);
+    setIsListening(false);
+    setAudioLevels(new Array(8).fill(0));
+  };
+
+  const turnMicOn = async () => {
+    // Only run on client side
+    if (typeof window === 'undefined') return;
+    
+    setMicEnabled(true);
+    await initializeAudioAnalysis();
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch (err) {
+        console.log('Speech recognition start failed:', err);
+      }
+    }
+  };
+
+  const toggleMicrophone = async () => {
+    // Only run on client side
+    if (typeof window === 'undefined') return;
+    
+    if (micEnabled) {
+      // Turn off microphone
+      if (recognitionRef.current && isListening) {
+        recognitionRef.current.stop();
+      }
+      stopAudioAnalysis();
+      setMicEnabled(false);
+      setIsListening(false);
+      setAudioLevels(new Array(8).fill(0));
+    } else {
+      // Turn on microphone
+      setMicEnabled(true);
+      await initializeAudioAnalysis();
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+        } catch (err) {
+          console.log('Speech recognition start failed:', err);
+        }
+      }
+    }
+  };
+
   const startListening = () => {
-    if (recognitionRef.current && !isListening && !isProcessing) {
+    if (recognitionRef.current && !isListening && micEnabled) {
       recognitionRef.current.start();
     }
   };
@@ -162,35 +429,211 @@ export default function TalkPage() {
   };
 
   const clearMessages = () => {
-    setMessages([{
-      id: '1',
-      text: 'Hello! I\'m your AI assistant. Click the microphone to start talking to me.',
-      isUser: false,
-      timestamp: new Date()
-    }]);
+    setMessages([]);
+    setHasUserSpoken(false);
+    setCallDuration(0);
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const endCall = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    if (synthRef.current) {
+      synthRef.current.cancel();
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    stopAudioAnalysis();
+    setIsListening(false);
+    setIsSpeaking(false);
+    setIsProcessing(false);
+    setMicEnabled(false);
+    setAudioLevels(new Array(8).fill(0));
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-4xl mx-auto">
+    <div className="min-h-screen bg-gray-100 p-4">
+      <div className="max-w-6xl mx-auto">
+        {/* Video Call Interface */}
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
-          {/* Header */}
-          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
-            <h1 className="text-3xl font-bold text-center">Voice AI Chat</h1>
-            <p className="text-center text-blue-100 mt-2">
-              Talk to your AI assistant using your voice
-            </p>
+          {/* Video Panels */}
+          <div className="relative h-[600px] bg-gray-200 flex">
+            {/* AI Panel (Left) */}
+            <div className="flex-1 m-4 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg flex items-center justify-center relative">
+              <div className="text-center text-white">
+                <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <p className="text-lg font-medium">AI Assistant</p>
+                {(isSpeaking || isProcessing) && (
+                  <div className="mt-2 flex justify-center">
+                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* User Panel (Right) */}
+            <div className="flex-1 m-4 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg flex items-center justify-center relative overflow-hidden">
+              {cameraEnabled && userVideoStream ? (
+                <div className="w-full h-full relative">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover rounded-xl"
+                  />
+                  <div className="absolute bottom-2 left-2 text-white text-sm font-medium bg-black bg-opacity-50 px-2 py-1 rounded">
+                    You
+                  </div>
+                  {micEnabled && (
+                    <div className="absolute top-2 right-2">
+                      <div className={`w-3 h-3 rounded-full ${isListening ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center text-white">
+                  <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <p className="text-lg font-medium">You</p>
+                  {micEnabled && (
+                    <div className="mt-2 flex justify-center">
+                      <div className={`w-3 h-3 rounded-full ${isListening ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+
+
           </div>
 
-          {/* Messages */}
-          <div className="h-96 overflow-y-auto p-6 space-y-4">
+        {/* Controls Bar */}
+          <div className="bg-gray-50 p-6">
+            <div className="flex items-center justify-between">
+              {/* Left Side - Microphone and Camera */}
+              <div className="flex items-center space-x-4 w-32">
+                {/* Microphone Button */}
+                <button
+                  onClick={toggleMicrophone}
+                  disabled={isProcessing || isSpeaking}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
+                    micEnabled
+                      ? 'bg-green-600 hover:bg-green-700 text-white'
+                      : 'bg-gray-600 hover:bg-gray-700 text-white disabled:bg-gray-400 disabled:cursor-not-allowed'
+                  }`}
+                >
+                  {micEnabled ? (
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                      <path d="M3 3l18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                </button>
+
+                {/* Camera Toggle Button */}
+                <button
+                  onClick={toggleCamera}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
+                    cameraEnabled
+                      ? 'bg-green-600 hover:bg-green-700 text-white'
+                      : 'bg-gray-600 hover:bg-gray-700 text-white'
+                  }`}
+                >
+                  {cameraEnabled ? (
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M4 6h2l2-2h8l2 2h2c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V8c0-1.1.9-2 2-2zm8 3c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm0 8c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z"/>
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M4 6h2l2-2h8l2 2h2c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V8c0-1.1.9-2 2-2zm8 3c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm0 8c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z"/>
+                      <path d="M3 3l18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                </button>
+              </div>
+
+
+              {/* Right Side - Timer and End Call */}
+              <div className="flex items-center space-x-4 justify-end">
+                {/* Call Timer */}
+                <div className="w-24 h-12 rounded-full bg-gray-300 bg-opacity-50 text-black px-3 py-2.5 text-lg text-center flex items-center justify-center font-bold">
+                  {formatTime(callDuration)}
+                </div>
+
+                {/* End Call Button */}
+                <button
+                  onClick={endCall}
+                  className="w-30 h-12 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center transition-all duration-200 px-4"
+                >
+                  End lesson
+                </button>
+              </div>
+            </div>
+
+            {/* Status Indicators */}
+            <div className="flex justify-center space-x-8 mt-4 text-sm text-gray-600">
+              <div className="flex items-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${micEnabled ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                <span>Microphone</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${isSpeaking ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+                <span>Speaking</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${isProcessing ? 'bg-yellow-500' : 'bg-gray-300'}`}></div>
+                <span>Processing</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className={`w-3 h-3 rounded-full ${cameraEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
+                <span>Camera</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Error Message */}
+          {error && (
+            <div className="px-6 py-3 bg-red-100 border-l-4 border-red-500 text-red-700">
+              <p className="text-sm">{error}</p>
+            </div>
+          )}
+
+          {/* Messages Log (Collapsible) */}
+          {messages.length > 0 && (
+            <div className="border-t border-gray-200">
+              <details className="group">
+                <summary className="px-6 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors duration-200">
+                  <span className="font-medium text-gray-700">View Conversation Log ({messages.length} messages)</span>
+                </summary>
+                <div className="max-h-64 overflow-y-auto p-6 space-y-3">
             {messages.map((message) => (
               <div
                 key={message.id}
                 className={`flex ${message.isUser ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl ${
+                        className={`max-w-xs px-4 py-2 rounded-2xl ${
                     message.isUser
                       ? 'bg-blue-600 text-white'
                       : 'bg-gray-200 text-gray-800'
@@ -206,7 +649,7 @@ export default function TalkPage() {
             
             {isProcessing && (
               <div className="flex justify-start">
-                <div className="bg-gray-200 text-gray-800 max-w-xs lg:max-w-md px-4 py-2 rounded-2xl">
+                      <div className="bg-gray-200 text-gray-800 max-w-xs px-4 py-2 rounded-2xl">
                   <div className="flex items-center space-x-2">
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
                     <span className="text-sm">AI is thinking...</span>
@@ -215,62 +658,9 @@ export default function TalkPage() {
               </div>
             )}
           </div>
-
-          {/* Error Message */}
-          {error && (
-            <div className="px-6 py-3 bg-red-100 border-l-4 border-red-500 text-red-700">
-              <p className="text-sm">{error}</p>
+              </details>
             </div>
           )}
-
-          {/* Controls */}
-          <div className="bg-gray-50 p-6">
-            <div className="flex justify-center space-x-4">
-              <button
-                onClick={startListening}
-                disabled={isListening || isProcessing || isSpeaking}
-                className={`px-6 py-3 rounded-full font-semibold transition-all duration-200 ${
-                  isListening
-                    ? 'bg-red-500 hover:bg-red-600 text-white'
-                    : 'bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-400 disabled:cursor-not-allowed'
-                }`}
-              >
-                {isListening ? 'Listening...' : 'Start Talking'}
-              </button>
-              
-              {isListening && (
-                <button
-                  onClick={stopListening}
-                  className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-full font-semibold transition-all duration-200"
-                >
-                  Stop
-                </button>
-              )}
-              
-              <button
-                onClick={clearMessages}
-                className="px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-full font-semibold transition-all duration-200"
-              >
-                Clear Chat
-              </button>
-            </div>
-
-            {/* Status Indicators */}
-            <div className="flex justify-center space-x-6 mt-4 text-sm text-gray-600">
-              <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${isListening ? 'bg-red-500' : 'bg-gray-300'}`}></div>
-                <span>Listening</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${isSpeaking ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                <span>Speaking</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${isProcessing ? 'bg-yellow-500' : 'bg-gray-300'}`}></div>
-                <span>Processing</span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
