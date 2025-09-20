@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useProfiles } from '@/hooks/useProfiles';
+import Link from 'next/link';
 
 interface Message {
   id: string;
@@ -10,6 +12,7 @@ interface Message {
 }
 
 export default function TalkPage() {
+  const { activeProfile } = useProfiles();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -265,6 +268,19 @@ export default function TalkPage() {
     };
   }, []);
 
+  // Initialize with profile message
+  useEffect(() => {
+    if (activeProfile && messages.length === 0) {
+      const welcomeMessage: Message = {
+        id: Date.now().toString(),
+        text: `Hi... I'm ${activeProfile.name}. My parents said you're going to help me with ${activeProfile.subject}...`,
+        isUser: false,
+        timestamp: new Date()
+      };
+      setMessages([welcomeMessage]);
+    }
+  }, [activeProfile, messages.length]);
+
   const toggleCamera = async () => {
     if (cameraEnabled) {
       // Turn off camera
@@ -334,6 +350,7 @@ export default function TalkPage() {
         },
         body: JSON.stringify({ 
           message: text,
+          studentId: activeProfile?.id,
           conversationHistory: messages.slice(-10) // Send last 10 messages for context
         }),
       });
@@ -493,6 +510,23 @@ export default function TalkPage() {
     setMicEnabled(false);
     setAudioLevels(new Array(8).fill(0));
   };
+
+  if (!activeProfile) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">No Profile Selected</h1>
+          <p className="text-gray-600 mb-6">Please select a student profile to start the voice chat session.</p>
+          <Link 
+            href="/"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors"
+          >
+            Go to Home
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-100 p-4">
