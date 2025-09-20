@@ -8,6 +8,7 @@ import {
   MotionValue,
 } from "framer-motion";
 import { students, Student } from "@/lib/students";
+
 import { useProfiles } from "@/contexts/ProfileContext";
 import { useRouter } from "next/navigation";
 
