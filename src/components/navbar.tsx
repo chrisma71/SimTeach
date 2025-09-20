@@ -10,6 +10,7 @@ export default function Navbar() {
 
   const navItems = [
     { href: '/', label: 'Home' },
+    { href: '/dashboard', label: 'Dashboard' },
   ];
 
   if (isLoading) {

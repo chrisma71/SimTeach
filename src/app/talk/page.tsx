@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { cleanupAllAudioResources } from '@/lib/audio-cleanup';
 import { ChatLog } from '@/types/chatLog';
+import { students } from '@/lib/students';
 
 interface Message {
   id: string;
@@ -16,7 +17,7 @@ interface Message {
 }
 
 export default function TalkPage() {
-  const { activeProfile, isLoading } = useProfiles();
+  const { activeProfile, isLoading, setActiveProfile } = useProfiles();
   const { user, isLoading: authLoading } = useAuth0();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -339,9 +340,38 @@ export default function TalkPage() {
     };
   }, []);
 
-  // Profile initialization - no automatic message
+  // Handle dashboard student selection - separate from profile loading
   useEffect(() => {
-    // Profile is loaded, ready for conversation
+    if (typeof window !== 'undefined' && !isLoading) {
+      const selectedStudent = sessionStorage.getItem('selectedStudent');
+      if (selectedStudent) {
+        try {
+          const student = JSON.parse(selectedStudent);
+          console.log('Student selected from dashboard:', student);
+          console.log('Available students:', students.map(s => ({ id: s.id, name: s.name, subject: s.subject })));
+          
+          // Find the student in the profiles list and set as active
+          const profileStudent = students.find(s => s.id === student.id);
+          if (profileStudent) {
+            console.log('Setting active profile from dashboard selection:', profileStudent);
+            setActiveProfile(profileStudent);
+          } else {
+            console.warn('Student not found in profiles list:', student);
+            console.warn('Available student IDs:', students.map(s => s.id));
+          }
+          
+          // Clear the session storage after reading
+          sessionStorage.removeItem('selectedStudent');
+        } catch (err) {
+          console.error('Error parsing selected student:', err);
+          sessionStorage.removeItem('selectedStudent');
+        }
+      }
+    }
+  }, [isLoading, setActiveProfile]);
+
+  // Profile is loaded, ready for conversation
+  useEffect(() => {
     if (!isLoading && activeProfile) {
       console.log(`Profile loaded: ${activeProfile.name} - ${activeProfile.subject} - ID: ${activeProfile.id}`);
     }
@@ -513,6 +543,9 @@ export default function TalkPage() {
 
     try {
       console.log('Sending request with studentId:', activeProfile.id);
+      console.log('Current conversation history length:', messages.length);
+      console.log('Sending last 10 messages:', messages.slice(-10));
+      console.log('User ID for session history:', user?._id || 'demo-user-id');
       
       // Send to AI API with conversation history
       const response = await fetch('/api/chat', {
@@ -523,7 +556,8 @@ export default function TalkPage() {
         body: JSON.stringify({ 
           message: text,
           studentId: activeProfile.id,
-          conversationHistory: messages.slice(-10) // Send last 10 messages for context
+          conversationHistory: messages.slice(-10), // Send last 10 messages for context
+          userId: user?._id || 'demo-user-id' // Pass user ID for session history
         }),
       });
 

@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     console.error('User sync test error:', error);
     return NextResponse.json(
-      { error: 'User sync test failed', details: error.message },
+      { error: 'User sync test failed', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
