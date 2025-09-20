@@ -11,6 +11,7 @@ export default function Navbar() {
   const navItems = [
     { href: '/', label: 'Home' },
     { href: '/dashboard', label: 'Dashboard' },
+    { href: '/review', label: 'History' }
   ];
 
   if (isLoading) {
@@ -35,7 +36,8 @@ export default function Navbar() {
   return (
     <nav className="bg-white shadow-lg border-b border-gray-200 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
+        <div className="flex justify-between items-center h-16">
+          {/* Left side - Logo */}
           <div className="flex items-center">
             <Link href="/" className="flex-shrink-0">
               <span className="text-2xl font-bold text-gray-900">
@@ -44,6 +46,16 @@ export default function Navbar() {
             </Link>
           </div>
           
+          {/* Center - Welcome message */}
+          {user && (
+            <div className="flex-1 flex justify-center">
+                <span className="text-xl font-bold text-gray-800">
+                  Welcome, {user.username}
+                </span>
+            </div>
+          )}
+          
+          {/* Right side - Navigation and actions */}
           <div className="flex items-center space-x-8">
             {user ? (
               <>
@@ -60,17 +72,12 @@ export default function Navbar() {
                     {item.label}
                   </Link>
                 ))}
-                <div className="flex items-center space-x-4">
-                  <span className="text-sm text-gray-600">
-                    Welcome, {user.username}
-                  </span>
-                  <button
-                    onClick={logout}
-                    className="text-sm text-gray-600 hover:text-gray-900 transition-colors duration-200"
-                  >
-                    Logout
-                  </button>
-                </div>
+                <button
+                  onClick={logout}
+                  className="text-sm text-gray-600 hover:text-gray-900 transition-colors duration-200 hover:text-bold"
+                >
+                  Logout
+                </button>
               </>
             ) : (
               <div className="flex items-center space-x-4">
