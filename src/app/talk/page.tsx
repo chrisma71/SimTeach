@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useProfiles } from '@/contexts/ProfileContext';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ChatLog } from '@/types/chatLog';
 
 interface Message {
@@ -14,6 +15,7 @@ interface Message {
 
 export default function TalkPage() {
   const { activeProfile, isLoading } = useProfiles();
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -178,19 +180,6 @@ export default function TalkPage() {
 
       recognitionRef.current.onresult = async (event) => {
         console.log('Speech recognition result event:', event);
-        
-        // Don't process speech recognition results if AI is speaking or processing
-        if (isSpeaking || isProcessing) {
-          console.log('Ignoring speech recognition - AI is speaking or processing');
-          return;
-        }
-        
-        // Additional check: if microphone is not enabled, ignore results
-        if (!micEnabled) {
-          console.log('Ignoring speech recognition - microphone not enabled');
-          return;
-        }
-        
         // Only process final results, not interim ones
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
@@ -199,12 +188,6 @@ export default function TalkPage() {
             const transcript = result[0].transcript;
             console.log('Final transcript:', transcript);
             if (transcript.trim()) {
-              // Final check before processing
-              if (isSpeaking || isProcessing || !micEnabled) {
-                console.log('Ignoring final transcript - AI is speaking, processing, or mic disabled');
-                return;
-              }
-              
               setHasUserSpoken(true);
               setInterimTranscript('');
               console.log('Calling handleUserMessage with:', transcript);
@@ -262,7 +245,7 @@ export default function TalkPage() {
         // Restart recognition if microphone is enabled and we're not processing/speaking
         if (micEnabled && !isProcessing && !isSpeaking) {
           setTimeout(() => {
-            if (recognitionRef.current && micEnabled && !isListening && !isSpeaking && !isProcessing) {
+            if (recognitionRef.current && micEnabled && !isListening) {
               try {
                 recognitionRef.current.start();
               } catch (err) {
@@ -414,20 +397,12 @@ export default function TalkPage() {
     
     setMessages(prev => [...prev, userMessage]);
     
-    // Aggressively turn off microphone and stop speech recognition
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (err) {
-        console.log('Error stopping speech recognition in handleUserMessage:', err);
-      }
-    }
+    // Turn off microphone immediately after user message is registered
     turnMicOff();
     
     setIsProcessing(true);
     
     // Ensure microphone stays off during processing and speaking
-    // This is redundant but ensures mic is definitely off
     if (micEnabled) {
       turnMicOff();
     }
@@ -481,11 +456,6 @@ export default function TalkPage() {
     if (synthRef.current) {
       setIsSpeaking(true);
       
-      // Completely stop speech recognition when AI starts speaking
-      if (recognitionRef.current && isListening) {
-        recognitionRef.current.stop();
-      }
-      
       // Ensure microphone is off when AI starts speaking
       if (micEnabled) {
         turnMicOff();
@@ -496,33 +466,21 @@ export default function TalkPage() {
       utterance.pitch = 1;
       utterance.volume = 1;
       
-      utterance.onstart = () => {
-        // Double-check that speech recognition is stopped when AI starts speaking
-        if (recognitionRef.current && isListening) {
-          recognitionRef.current.stop();
-        }
-      };
-      
       utterance.onend = () => {
         setIsSpeaking(false);
         // Turn microphone back on after AI finishes speaking
-        // Add a small delay to prevent immediate re-activation
-        setTimeout(() => {
-          if (!micEnabled) {
-            turnMicOn();
-          }
-        }, 1000); // Increased delay to 1 second
+        if (!micEnabled) {
+          turnMicOn();
+        }
       };
       
       utterance.onerror = (event) => {
         console.error('Speech synthesis error:', event.error);
         setIsSpeaking(false);
         // Turn microphone back on even on error
-        setTimeout(() => {
-          if (!micEnabled) {
-            turnMicOn();
-          }
-        }, 1000);
+        if (!micEnabled) {
+          turnMicOn();
+        }
       };
       
       synthRef.current.speak(utterance);
@@ -530,12 +488,8 @@ export default function TalkPage() {
   };
 
   const turnMicOff = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (err) {
-        console.log('Error stopping speech recognition:', err);
-      }
+    if (recognitionRef.current && isListening) {
+      recognitionRef.current.stop();
     }
     stopAudioAnalysis();
     setMicEnabled(false);
@@ -647,17 +601,20 @@ export default function TalkPage() {
       if (response.ok) {
         const data = await response.json();
         console.log('Chat session logged successfully:', data);
+        return true; // Return success status
       } else {
         console.error('Failed to log chat session');
+        return false;
       }
     } catch (error) {
       console.error('Error logging chat session:', error);
+      return false;
     }
   };
 
   const endCall = async () => {
     // Log the chat session before ending
-    await logChatSession();
+    const logged = await logChatSession();
     
     if (recognitionRef.current) {
       recognitionRef.current.stop();
@@ -674,6 +631,14 @@ export default function TalkPage() {
     setIsProcessing(false);
     setMicEnabled(false);
     setAudioLevels(new Array(8).fill(0));
+    
+    // Redirect to homepage after logging is complete
+    if (logged) {
+      router.push('/');
+    } else {
+      // Even if logging failed, still redirect to homepage
+      router.push('/');
+    }
   };
 
   if (isLoading) {
