@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/mongodb';
 import { ChatLog } from '@/types/chatLog';
-import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,30 +34,35 @@ export async function POST(request: NextRequest) {
 
     // Verify authentication for JSON requests (not for sendBeacon)
     if (contentType?.includes('application/json')) {
-      const authHeader = request.headers.get('authorization');
+      const sessionCookie = request.cookies.get('auth0_session');
       
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      if (!sessionCookie) {
         return NextResponse.json(
           { error: 'Authentication required' },
           { status: 401 }
         );
       }
 
-      const token = authHeader.substring(7);
-      
       try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+        const session = JSON.parse(sessionCookie.value);
         
+        if (!session.user || !session.user.sub) {
+          return NextResponse.json(
+            { error: 'Invalid session' },
+            { status: 401 }
+          );
+        }
+
         // Verify the userId matches the authenticated user
-        if (decoded.userId !== userId) {
+        if (session.user.sub !== userId) {
           return NextResponse.json(
             { error: 'Unauthorized' },
             { status: 403 }
           );
         }
-      } catch (jwtError) {
+      } catch (error) {
         return NextResponse.json(
-          { error: 'Invalid token' },
+          { error: 'Invalid session format' },
           { status: 401 }
         );
       }

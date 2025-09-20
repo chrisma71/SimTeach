@@ -2,15 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth0 } from '@/contexts/Auth0Context';
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { user, logout, isLoading } = useAuth();
+  const { user, logout, isLoading } = useAuth0();
 
   const navItems = [
     { href: '/', label: 'Home' },
-    { href: '/talk', label: 'Voice Chat' },
   ];
 
   if (isLoading) {
@@ -63,9 +62,6 @@ export default function Navbar() {
                 <div className="flex items-center space-x-4">
                   <span className="text-sm text-gray-600">
                     Welcome, {user.username}
-                  </span>
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                    {user.role}
                   </span>
                   <button
                     onClick={logout}

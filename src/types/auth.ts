@@ -2,7 +2,6 @@ export interface User {
   _id?: string;
   email: string;
   username: string;
-  role: 'student' | 'tutor' | 'admin';
   institution: string;
   createdAt: Date;
   updatedAt: Date;
@@ -20,7 +19,6 @@ export interface SignupData {
   email: string;
   username: string;
   password: string;
-  role: 'student' | 'tutor' | 'admin';
   institution: string;
 }
 

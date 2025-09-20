@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/mongodb';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { LoginData, User } from '@/types/auth';
+import { syncUserToMongoDB } from '@/lib/user-sync';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const { email, password }: LoginData = await request.json();
+    const { email, password } = await req.json();
 
     // Validate required fields
     if (!email || !password) {
@@ -18,44 +13,69 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const db = await getDatabase();
-    const usersCollection = db.collection<User>('users');
-
-    // Find user by email
-    const user = await usersCollection.findOne({ email });
-
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
-
-    // Check password
-    const isValidPassword = await bcrypt.compare(password, (user as any).password);
-
-    if (!isValidPassword) {
-      return NextResponse.json(
-        { error: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
-
-    // Create JWT token
-    const token = jwt.sign(
-      { userId: user._id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
-    // Return user without password
-    const { password: _, ...userWithoutPassword } = user;
-
-    return NextResponse.json({
-      success: true,
-      user: userWithoutPassword,
-      token
+    // Authenticate with Auth0 using Resource Owner Password Grant
+    const authResponse = await fetch(`https://${process.env.AUTH0_ISSUER_BASE_URL}/oauth/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        grant_type: 'password',
+        username: email,
+        password: password,
+        client_id: process.env.AUTH0_CLIENT_ID,
+        client_secret: process.env.AUTH0_CLIENT_SECRET,
+        audience: `https://${process.env.AUTH0_ISSUER_BASE_URL}/api/v2/`,
+        scope: 'openid profile email',
+      }),
     });
+
+    const authData = await authResponse.json();
+
+    if (authData.error) {
+      console.error('Auth0 login error:', authData);
+      return NextResponse.json(
+        { error: 'Invalid email or password' },
+        { status: 401 }
+      );
+    }
+
+    // Get user info
+    const userResponse = await fetch(`https://${process.env.AUTH0_ISSUER_BASE_URL}/userinfo`, {
+      headers: {
+        'Authorization': `Bearer ${authData.access_token}`,
+      },
+    });
+
+    const userData = await userResponse.json();
+
+    // Sync user to MongoDB
+    try {
+      const mongoUser = await syncUserToMongoDB(userData);
+      console.log('User synced to MongoDB:', mongoUser._id);
+    } catch (syncError) {
+      console.error('Failed to sync user to MongoDB:', syncError);
+      // Don't fail the login if sync fails, just log the error
+    }
+
+    // Set session cookie
+    const response = NextResponse.json({
+      message: 'Login successful',
+      user: userData,
+    });
+
+    response.cookies.set('auth0_session', JSON.stringify({
+      access_token: authData.access_token,
+      id_token: authData.id_token,
+      user: userData,
+    }), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    });
+
+    return response;
 
   } catch (error) {
     console.error('Login error:', error);

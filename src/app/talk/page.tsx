@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useProfiles } from '@/contexts/ProfileContext';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth0 } from '@/contexts/Auth0Context';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { cleanupAllAudioResources } from '@/lib/audio-cleanup';
 import { ChatLog } from '@/types/chatLog';
 
 interface Message {
@@ -16,13 +17,14 @@ interface Message {
 
 export default function TalkPage() {
   const { activeProfile, isLoading } = useProfiles();
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading } = useAuth0();
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
   const [hasUserSpoken, setHasUserSpoken] = useState(false);
   const [userVideoStream, setUserVideoStream] = useState<MediaStream | null>(null);
@@ -45,6 +47,7 @@ export default function TalkPage() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
   // Audio analysis function
@@ -71,10 +74,7 @@ export default function TalkPage() {
       // If we detect audio while AI is speaking, interrupt it
       if (totalLevel > 50) { // Threshold for speech detection
         console.log('Audio detected while AI speaking - interrupting');
-        if (synthRef.current) {
-          synthRef.current.cancel();
-          setIsSpeaking(false);
-        }
+        stopAllSpeech();
       }
     }
 
@@ -124,6 +124,7 @@ export default function TalkPage() {
       }
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphoneStreamRef.current = stream; // Store the stream for cleanup
       
       // Resume audio context if it's suspended, or create new one if closed/doesn't exist
       if (audioContextRef.current?.state === 'suspended') {
@@ -162,6 +163,14 @@ export default function TalkPage() {
         console.log('Microphone disconnect error:', err);
       }
       microphoneRef.current = null;
+    }
+    // Stop the microphone stream
+    if (microphoneStreamRef.current) {
+      microphoneStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('Microphone track stopped');
+      });
+      microphoneStreamRef.current = null;
     }
     if (audioContextRef.current) {
       try {
@@ -206,10 +215,9 @@ export default function TalkPage() {
           
           if (!result.isFinal) {
             // User is speaking (interim result) - stop AI if it's speaking
-            if (isSpeaking && synthRef.current && transcript.trim().length > 0) {
+            if (isSpeaking && transcript.trim().length > 0) {
               console.log('User interrupting AI - stopping speech synthesis');
-              synthRef.current.cancel();
-              setIsSpeaking(false);
+              stopAllSpeech();
             }
             // Show interim transcript
             setInterimTranscript(transcript);
@@ -298,14 +306,15 @@ export default function TalkPage() {
 
 
     return () => {
+      console.log('Component unmounting - cleaning up all resources');
       if (recognitionRef.current) {
         recognitionRef.current.stop();
+        recognitionRef.current = null;
       }
-      if (synthRef.current) {
-        synthRef.current.cancel();
-      }
+      stopAllSpeech();
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
       if (speechTimeout) {
         clearTimeout(speechTimeout);
@@ -314,6 +323,19 @@ export default function TalkPage() {
         userVideoStream.getTracks().forEach(track => track.stop());
       }
       stopAudioAnalysis();
+      if (audioContextRef.current) {
+        try {
+          audioContextRef.current.close();
+        } catch (err) {
+          console.log('AudioContext close error on unmount:', err);
+        }
+        audioContextRef.current = null;
+      }
+      // Clear all refs
+      synthRef.current = null;
+      analyserRef.current = null;
+      microphoneRef.current = null;
+      microphoneStreamRef.current = null;
     };
   }, []);
 
@@ -328,9 +350,23 @@ export default function TalkPage() {
   // Handle page exit - log chat session before leaving
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      console.log('Before unload - cleaning up resources');
+      // Stop all audio and speech immediately
+      stopAllSpeech();
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      stopAudioAnalysis();
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      // Stop camera if active
+      if (userVideoStream) {
+        userVideoStream.getTracks().forEach(track => track.stop());
+      }
+      
       if (!hasLoggedSession && activeProfile && messages.length > 0 && user) {
         // Use sendBeacon for more reliable logging on page exit
-        const token = localStorage.getItem('authToken');
         const data = JSON.stringify({
           userId: user._id,
           studentId: activeProfile.id,
@@ -342,11 +378,38 @@ export default function TalkPage() {
         
         navigator.sendBeacon('/api/chat/log', data);
       }
+      
+      // Global cleanup to ensure all audio resources are released
+      cleanupAllAudioResources();
     };
 
     const handleVisibilityChange = () => {
-      if (document.hidden && !hasLoggedSession && activeProfile && messages.length > 0 && user) {
-        logChatSession();
+      if (document.hidden) {
+        console.log('Page hidden - cleaning up audio resources');
+        // Stop all audio and speech immediately
+        stopAllSpeech();
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+        stopAudioAnalysis();
+        if (audioContextRef.current) {
+          try {
+            audioContextRef.current.close();
+            audioContextRef.current = null;
+          } catch (err) {
+            console.log('AudioContext close error:', err);
+          }
+        }
+        if (userVideoStream) {
+          userVideoStream.getTracks().forEach(track => track.stop());
+        }
+        
+        if (!hasLoggedSession && activeProfile && messages.length > 0 && user) {
+          logChatSession();
+        }
+        
+        // Global cleanup to ensure all audio resources are released
+        cleanupAllAudioResources();
       }
     };
 
@@ -398,6 +461,11 @@ export default function TalkPage() {
     }
   }, [userVideoStream]);
 
+  // Debug microphone state changes
+  useEffect(() => {
+    console.log('Microphone state changed - micEnabled:', micEnabled, 'isListening:', isListening);
+  }, [micEnabled, isListening]);
+
   const handleUserMessage = async (text: string) => {
     console.log('handleUserMessage called with text:', text);
     console.log('handleUserMessage - isLoading:', isLoading, 'activeProfile:', activeProfile);
@@ -418,10 +486,9 @@ export default function TalkPage() {
     console.log('handleUserMessage: Processing message for profile:', activeProfile.name);
 
     // Stop AI speech if it's currently speaking (user interruption)
-    if (isSpeaking && synthRef.current) {
+    if (isSpeaking) {
       console.log('Stopping AI speech due to user interruption');
-      synthRef.current.cancel();
-      setIsSpeaking(false);
+      stopAllSpeech();
     }
 
     // Add user message
@@ -489,17 +556,28 @@ export default function TalkPage() {
     }
   };
 
+  const stopAllSpeech = () => {
+    if (synthRef.current) {
+      // Cancel all pending speech
+      synthRef.current.cancel();
+      // Force stop by pausing and resuming then canceling again
+      synthRef.current.pause();
+      synthRef.current.resume();
+      synthRef.current.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
   const speakText = (text: string) => {
     if (synthRef.current) {
-      // Cancel any existing speech before starting new one
-      synthRef.current.cancel();
+      // Stop any existing speech before starting new one
+      stopAllSpeech();
       
       setIsSpeaking(true);
       
-      // Ensure microphone is off when AI starts speaking
-      if (micEnabled) {
-        turnMicOff();
-      }
+      // ALWAYS turn off microphone when AI starts speaking to prevent feedback loop
+      console.log('AI starting to speak - turning off microphone');
+      turnMicOff();
       
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
@@ -513,10 +591,9 @@ export default function TalkPage() {
       utterance.onend = () => {
         console.log('AI finished speaking');
         setIsSpeaking(false);
-        // Turn microphone back on after AI finishes speaking
-        if (!micEnabled) {
-          turnMicOn();
-        }
+        // Automatically turn microphone back on when AI finishes speaking
+        console.log('AI finished speaking - turning microphone back on');
+        turnMicOn();
       };
       
       utterance.onerror = (event) => {
@@ -525,10 +602,9 @@ export default function TalkPage() {
           console.error('Speech synthesis error:', event.error);
         }
         setIsSpeaking(false);
-        // Turn microphone back on even on error
-        if (!micEnabled) {
-          turnMicOn();
-        }
+        // Automatically turn microphone back on when AI speech has an error
+        console.log('AI speech error - turning microphone back on');
+        turnMicOn();
       };
       
       synthRef.current.speak(utterance);
@@ -536,6 +612,7 @@ export default function TalkPage() {
   };
 
   const turnMicOff = () => {
+    console.log('turnMicOff called - disabling microphone');
     if (recognitionRef.current && isListening) {
       recognitionRef.current.stop();
     }
@@ -543,17 +620,20 @@ export default function TalkPage() {
     setMicEnabled(false);
     setIsListening(false);
     setAudioLevels(new Array(8).fill(0));
+    console.log('Microphone disabled - micEnabled set to false');
   };
 
   const turnMicOn = async () => {
     // Only run on client side
     if (typeof window === 'undefined') return;
     
+    console.log('turnMicOn called - enabling microphone');
     setMicEnabled(true);
     await initializeAudioAnalysis();
     if (recognitionRef.current) {
       try {
         recognitionRef.current.start();
+        console.log('Microphone enabled - micEnabled set to true');
       } catch (err) {
         console.log('Speech recognition start failed:', err);
       }
@@ -576,6 +656,7 @@ export default function TalkPage() {
       setMicEnabled(false);
       setIsListening(false);
       setAudioLevels(new Array(8).fill(0));
+      console.log('Microphone toggled OFF - micEnabled should be false');
     } else {
       // Turn on microphone
       console.log('Turning on microphone');
@@ -591,6 +672,7 @@ export default function TalkPage() {
       } else {
         console.log('recognitionRef.current is null');
       }
+      console.log('Microphone toggled ON - micEnabled should be true');
     }
   };
 
@@ -631,12 +713,10 @@ export default function TalkPage() {
     try {
       setHasLoggedSession(true);
       
-      const token = localStorage.getItem('authToken');
       const response = await fetch('/api/chat/log', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           userId: user._id,
@@ -651,44 +731,90 @@ export default function TalkPage() {
       if (response.ok) {
         const data = await response.json();
         console.log('Chat session logged successfully:', data);
+        setSuccessMessage('Chat session saved successfully!');
+        setTimeout(() => setSuccessMessage(null), 3000); // Auto-dismiss after 3 seconds
         return true; // Return success status
       } else {
-        console.error('Failed to log chat session');
+        const errorData = await response.json();
+        console.error('Failed to log chat session:', errorData);
+        setError(`Failed to save chat session: ${errorData.error || 'Unknown error'}`);
         return false;
       }
     } catch (error) {
       console.error('Error logging chat session:', error);
+      setError(`Failed to save chat session: ${error instanceof Error ? error.message : 'Network error'}`);
       return false;
     }
   };
 
   const endCall = async () => {
-    // Log the chat session before ending
-    const logged = await logChatSession();
+    console.log('Ending call - starting cleanup');
     
+    // Immediately stop all speech synthesis
+    stopAllSpeech();
+    
+    // Stop speech recognition immediately
     if (recognitionRef.current) {
+      console.log('Stopping speech recognition');
       recognitionRef.current.stop();
     }
-    if (synthRef.current) {
-      synthRef.current.cancel();
-    }
+    
+    // Stop timer immediately
     if (timerRef.current) {
+      console.log('Clearing timer');
       clearInterval(timerRef.current);
+      timerRef.current = null;
     }
+    
+    // Stop audio analysis immediately (this now includes microphone stream cleanup)
+    console.log('Stopping audio analysis and microphone stream');
     stopAudioAnalysis();
+    
+    // Stop user video stream if active
+    if (userVideoStream) {
+      console.log('Stopping user video stream');
+      userVideoStream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Video track stopped');
+      });
+      setUserVideoStream(null);
+    }
+    
+    // Reset all states immediately
+    console.log('Resetting all states');
     setIsListening(false);
     setIsSpeaking(false);
     setIsProcessing(false);
     setMicEnabled(false);
+    setCameraEnabled(false);
     setAudioLevels(new Array(8).fill(0));
+    setHasUserSpoken(false);
+    setInterimTranscript('');
+    setWebcamError(null);
     
+    // Clear all refs
+    recognitionRef.current = null;
+    synthRef.current = null;
+    timerRef.current = null;
+    analyserRef.current = null;
+    microphoneRef.current = null;
+    microphoneStreamRef.current = null;
+    audioContextRef.current = null;
+    
+    console.log('Cleanup complete, logging session...');
+
+    // Log the chat session after stopping everything
+    const logged = await logChatSession();
+
+    console.log('Session logged, cleaning up globally...');
+
+    // Global cleanup to ensure all audio resources are released
+    cleanupAllAudioResources();
+
+    console.log('Global cleanup complete, redirecting to homepage');
+
     // Redirect to homepage after logging is complete
-    if (logged) {
-      router.push('/');
-    } else {
-      // Even if logging failed, still redirect to homepage
-      router.push('/');
-    }
+    router.push('/');
   };
 
   // Check authentication
@@ -712,16 +838,10 @@ export default function TalkPage() {
           <p className="text-gray-600 mb-6">Please log in to start a tutoring session.</p>
           <div className="space-x-4">
             <Link 
-              href="/login"
+              href="/api/auth/login"
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors"
             >
-              Login
-            </Link>
-            <Link 
-              href="/signup"
-              className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg transition-colors"
-            >
-              Sign Up
+              Login with Auth0
             </Link>
           </div>
         </div>
@@ -932,29 +1052,54 @@ export default function TalkPage() {
             </div>
           </div>
 
+          {/* Success Message */}
+          {successMessage && (
+            <div className="px-6 py-3 bg-green-100 border-l-4 border-green-500 text-green-700">
+              <div className="flex items-center justify-between">
+                <p className="text-sm flex-1">{successMessage}</p>
+                <button
+                  onClick={() => setSuccessMessage(null)}
+                  className="px-2 py-1 text-green-600 hover:text-green-800 transition-colors"
+                  title="Dismiss message"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Error Message */}
           {error && (
             <div className="px-6 py-3 bg-red-100 border-l-4 border-red-500 text-red-700">
               <div className="flex items-center justify-between">
-                <p className="text-sm">{error}</p>
-                {error.includes('Speech recognition') && retryCount < maxRetries && (
-                  <button
-                    onClick={() => {
-                      setError(null);
-                      setRetryCount(0);
-                      if (micEnabled && recognitionRef.current) {
-                        try {
-                          recognitionRef.current.start();
-                        } catch (err) {
-                          console.log('Manual retry failed:', err);
+                <p className="text-sm flex-1">{error}</p>
+                <div className="flex items-center space-x-2 ml-4">
+                  {error.includes('Speech recognition') && retryCount < maxRetries && (
+                    <button
+                      onClick={() => {
+                        setError(null);
+                        setRetryCount(0);
+                        if (micEnabled && recognitionRef.current) {
+                          try {
+                            recognitionRef.current.start();
+                          } catch (err) {
+                            console.log('Manual retry failed:', err);
+                          }
                         }
-                      }
-                    }}
-                    className="ml-4 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                      }}
+                      className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 transition-colors"
+                    >
+                      Retry
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setError(null)}
+                    className="px-2 py-1 text-red-600 hover:text-red-800 transition-colors"
+                    title="Dismiss error"
                   >
-                    Retry
+                    ✕
                   </button>
-                )}
+                </div>
               </div>
             </div>
           )}
