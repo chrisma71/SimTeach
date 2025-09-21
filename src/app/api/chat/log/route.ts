@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/mongodb';
 import { ChatLog, Feedback } from '@/types/chatLog';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import { ObjectId } from 'mongodb';
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,7 +29,10 @@ export async function POST(request: NextRequest) {
       studentSubject, 
       transcript, 
       conversationLength,
-      audioData
+      audioData,
+      type,
+      sessionId,
+      duration
     } = data;
 
     if (!userId || !studentId || !transcript) {
@@ -71,6 +78,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Use original transcript - speaker identification is already handled correctly
+    const processedTranscript = transcript;
+    let transcriptSummary = '';
+    let topicsCovered: string[] = [];
+
+    console.log('Using original transcript with proper speaker identification:', {
+      length: processedTranscript.length,
+      messages: processedTranscript.map((msg: any) => ({ text: msg.text.substring(0, 50) + '...', isUser: msg.isUser }))
+    });
+
     const db = await getDatabase();
     const chatLogsCollection = db.collection<ChatLog>('chatLogs');
 
@@ -85,12 +102,16 @@ export async function POST(request: NextRequest) {
       studentId,
       studentName: studentName || 'Unknown Student',
       studentSubject: studentSubject || 'Unknown Subject',
-      transcript,
+      transcript: processedTranscript, // Use processed transcript
       conversationCount: conversationCount + 1,
-      conversationLength,
+      conversationLength: conversationLength || duration || 0,
       audioUrl: audioData || undefined, // Store the base64 audio data
       createdAt: new Date(),
-      endedAt: new Date()
+      endedAt: new Date(),
+      type: type || 'tavus_video_session',
+      sessionId: sessionId || undefined,
+      summary: transcriptSummary, // Add OpenAI-generated summary
+      topicsCovered: topicsCovered // Add topics covered
     };
 
     const result = await chatLogsCollection.insertOne(chatLog);
@@ -104,7 +125,7 @@ export async function POST(request: NextRequest) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          transcript,
+          transcript: processedTranscript, // Use processed transcript
           studentName,
           studentSubject,
           conversationLength
@@ -133,11 +154,15 @@ export async function POST(request: NextRequest) {
       // Don't fail the main request if feedback generation fails
     }
 
-    // Generate session summary asynchronously
+    // Generate session summary asynchronously (optional AI enhancement)
     console.log('Starting session summary generation for session:', result.insertedId.toString());
-    generateSessionSummary(result.insertedId.toString(), transcript, studentName, studentSubject)
+    generateSessionSummary(result.insertedId.toString(), processedTranscript, studentName, studentSubject)
       .catch(error => {
-        console.error('Failed to generate session summary:', error);
+        if (error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('rate_limit')) {
+          console.log('OpenAI API quota exceeded, skipping session summary generation');
+        } else {
+          console.error('Failed to generate session summary:', error);
+        }
       });
 
     return NextResponse.json({ 
@@ -158,8 +183,6 @@ export async function POST(request: NextRequest) {
 // Function to generate session summary asynchronously
 async function generateSessionSummary(sessionId: string, transcript: any[], studentName: string, studentSubject: string) {
   try {
-    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-
     // Create a summary prompt that focuses on what was accomplished and how the student felt
     const summaryPrompt = `You are analyzing a tutoring session between a tutor and ${studentName}, a student studying ${studentSubject || 'Physics'}.
 
@@ -183,20 +206,23 @@ Summary:`;
     console.log('Student:', studentName);
     console.log('Transcript length:', transcript.length, 'messages');
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const result = await model.generateContent({
-      contents: [{ 
-        role: "user",
-        parts: [{ text: summaryPrompt }] 
-      }],
-      generationConfig: {
-        maxOutputTokens: 150,
-        temperature: 0.7,
-      },
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert at analyzing tutoring sessions. Write concise, student-perspective summaries in casual language."
+        },
+        {
+          role: "user",
+          content: summaryPrompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 150
     });
 
-    let summary = result.response.text() || "Session completed - no summary generated";
+    let summary = completion.choices[0]?.message?.content || "Session completed - no summary generated";
     
     // Clean the response text by removing markdown code blocks if present
     if (summary && summary.trim().startsWith('```')) {

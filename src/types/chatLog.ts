@@ -38,6 +38,9 @@ export interface ChatLog {
   summary?: string; // AI-generated summary of what was accomplished and how the student felt
   feedback?: Feedback; // AI-generated feedback for the tutoring session
   audioUrl?: string; // URL to recorded audio file
+  type?: string; // Type of session (e.g., 'tavus_video_session')
+  sessionId?: string; // Custom session identifier
+  topicsCovered?: string[]; // Topics discussed in the session
   createdAt: Date;
   endedAt: Date;
 }

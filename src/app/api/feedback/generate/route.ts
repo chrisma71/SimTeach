@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import { Feedback } from '@/types/chatLog';
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,21 +71,25 @@ Please analyze this tutoring session and provide detailed feedback in the follow
 
 Focus on constructive feedback that helps the tutor improve their skills.`;
 
-    console.log('Generating feedback with Gemini...');
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    console.log('Generating feedback with OpenAI...');
     
-    const result = await model.generateContent({
-      contents: [{ 
-        role: "user",
-        parts: [{ text: feedbackPrompt }] 
-      }],
-      generationConfig: {
-        maxOutputTokens: 2000,
-        temperature: 0.7,
-      },
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert tutoring coach analyzing tutoring sessions. Provide comprehensive, constructive feedback."
+        },
+        {
+          role: "user",
+          content: feedbackPrompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 2000
     });
 
-    const feedbackText = result.response.text();
+    const feedbackText = completion.choices[0]?.message?.content || 'No feedback generated';
     console.log('Generated feedback text:', feedbackText?.substring(0, 200) + '...');
     
     if (!feedbackText) {

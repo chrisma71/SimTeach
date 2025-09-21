@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import { students } from '@/lib/students';
 import { getDatabase } from '@/lib/mongodb';
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 // Function to generate personalized system prompt based on student
 function generateSystemPrompt(student: any, previousSessions: any[] = []): string {
@@ -240,8 +244,8 @@ export async function POST(request: NextRequest) {
       })));
     }
 
-    // Generate AI response using Gemini with personalized system prompt and full history
-    const aiResponse = await generateAIResponseWithGemini(message, fullConversationHistory, systemPrompt);
+    // Generate AI response using OpenAI with personalized system prompt and full history
+    const aiResponse = await generateAIResponseWithOpenAI(message, fullConversationHistory, systemPrompt);
 
     return NextResponse.json({ response: aiResponse });
   } catch (error) {
@@ -253,65 +257,61 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Function to generate AI response using Gemini with personalized system prompt
-async function generateAIResponseWithGemini(userMessage: string, conversationHistory: any[], systemPrompt: string): Promise<string> {
-  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-
+// Function to generate AI response using OpenAI with personalized system prompt
+async function generateAIResponseWithOpenAI(userMessage: string, conversationHistory: any[], systemPrompt: string): Promise<string> {
   try {
-    // Prepare conversation history for Gemini
-    const conversationText = conversationHistory
-      .map(msg => `${msg.isUser ? 'Tutor' : 'Student'}: ${msg.text}`)
-      .join('\n');
+    // Prepare conversation history for OpenAI
+    const conversationMessages = conversationHistory
+      .map(msg => ({
+        role: msg.isUser ? 'user' as const : 'assistant' as const,
+        content: msg.text
+      }));
 
-    const fullPrompt = `${systemPrompt}
+    const messages = [
+      {
+        role: 'system' as const,
+        content: systemPrompt
+      },
+      ...conversationMessages,
+      {
+        role: 'user' as const,
+        content: userMessage
+      }
+    ];
 
-CONVERSATION HISTORY:
-${conversationText}
-
-CURRENT MESSAGE FROM TUTOR:
-${userMessage}
-
-Respond as the student:`;
-
-    console.log('=== GEMINI REQUEST DEBUG ===');
+    console.log('=== OPENAI REQUEST DEBUG ===');
     console.log('System prompt length:', systemPrompt.length);
     console.log('Conversation history messages:', conversationHistory.length);
     console.log('Current user message:', userMessage);
-    console.log('Full prompt length:', fullPrompt.length);
+    console.log('Total messages:', messages.length);
     
     if (conversationHistory.length > 0) {
       console.log('Sample previous messages:');
       conversationHistory.slice(0, 3).forEach((msg, index) => {
-        console.log(`  ${index + 1}. (${msg.isUser ? 'USER' : 'AI'}): ${msg.text?.substring(0, 100)}...`);
+        console.log(`  ${index + 1}. (${msg.isUser ? 'TUTOR' : 'STUDENT'}): ${msg.text?.substring(0, 100)}...`);
       });
     }
     
-    console.log('=== END GEMINI REQUEST DEBUG ===\n');
+    console.log('=== END OPENAI REQUEST DEBUG ===\n');
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const result = await model.generateContent({
-      contents: [{ 
-        role: "user",
-        parts: [{ text: fullPrompt }] 
-      }],
-      generationConfig: {
-        maxOutputTokens: 150,
-        temperature: 0.7,
-      },
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: messages,
+      max_tokens: 150,
+      temperature: 0.7,
     });
 
-    let response = result.response.text() || "I'm sorry, I didn't understand that.";
+    let response = completion.choices[0]?.message?.content?.trim() || "I'm sorry, I didn't understand that.";
     
     // Clean the response text by removing markdown code blocks if present
     if (response && response.trim().startsWith('```')) {
       response = response.trim().replace(/^```\s*/, '').replace(/\s*```$/, '');
     }
     
-    console.log('AI Response:', response);
+    console.log('OpenAI Response:', response);
     return response;
   } catch (error) {
-    console.error('Gemini API error:', error);
+    console.error('OpenAI API error:', error);
     throw new Error('Failed to generate AI response');
   }
 }
