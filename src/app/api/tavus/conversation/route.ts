@@ -155,15 +155,20 @@ export async function POST(request: NextRequest) {
       // System prompt to disable Tavus response generation - only speak what we tell you
       const conversationalContext = generateSystemPrompt(student);
 
+      // Get the base URL for webhook callback
+      const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+      const webhookUrl = `${baseUrl}/api/tavus/transcript`;
+      
       // Simple avatar request with minimal properties - no custom greeting
       const requestBody = {
         replica_id: replicaId,
         persona_id: personaId,
         conversational_context: conversationalContext,
+        callback_url: webhookUrl, // Add webhook URL for transcript updates
         properties: {
           max_call_duration: 900,
           enable_recording: true,
-          enable_transcription: false, // Disable transcription since we're not using Tavus responses
+          enable_transcription: true, // Enable transcription so Tavus can hear us
           language: "english"
         }
       };

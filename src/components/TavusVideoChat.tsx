@@ -5,13 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useAuth0 } from '@/contexts/Auth0Context';
 import { Student } from '@/lib/students';
 
-interface Message {
-  id: string;
-  text: string;
-  isUser: boolean;
-  timestamp: Date;
-}
-
 interface TavusVideoChatProps {
   student: Student;
   onEnd?: () => void;
@@ -23,25 +16,29 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conversationData, setConversationData] = useState<any>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
   const [isCallActive, setIsCallActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [transcript, setTranscript] = useState<Array<{
+    id: string;
+    text: string;
+    isUser: boolean;
+    timestamp: Date;
+  }>>([]);
+  const [isTranscriptVisible, setIsTranscriptVisible] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [recognition, setRecognition] = useState<any>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
-  const [lastInterimTranscript, setLastInterimTranscript] = useState<string>('');
   const [isTavusSpeaking, setIsTavusSpeaking] = useState(false);
-  const [fullTranscript, setFullTranscript] = useState<string>('');
+  const [isUserTurn, setIsUserTurn] = useState(true); // Track whose turn it is
   
   // Refs
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const recognitionRef = useRef<any>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioStreamRef = useRef<MediaStream | null>(null);
+  const transcriptPollingRef = useRef<NodeJS.Timeout | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
+  const lastTranscriptTimeRef = useRef<number>(0);
+  const tavusResponseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastTavusResponseRef = useRef<string>('');
 
   // Timer for call duration
   useEffect(() => {
@@ -63,230 +60,158 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     };
   }, [isCallActive]);
 
-  // Initialize speech recognition
+  // Transcript polling effect
   useEffect(() => {
-    console.log('🎤 ===== INITIALIZING SPEECH RECOGNITION =====');
-    console.log('🎤 Window available:', typeof window !== 'undefined');
-    console.log('🎤 WebkitSpeechRecognition available:', 'webkitSpeechRecognition' in window);
-    console.log('🎤 SpeechRecognition available:', 'SpeechRecognition' in window);
-    
-    if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-      console.log('🎤 SpeechRecognition constructor:', SpeechRecognition);
-      const recognition = new SpeechRecognition();
-      console.log('🎤 Recognition object created:', recognition);
-      
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-      recognition.maxAlternatives = 1;
-      recognition.serviceURI = '';
-      
-      // Simple blob capture - just accumulate everything
-      let fullText = '';
-      
-      recognition.onstart = () => {
-        console.log('🎤 Speech recognition started');
-        setIsListening(true);
-        fullText = '';
-        setFullTranscript('');
-      };
-      
-      recognition.onresult = (event: any) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
-        
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-        
-        // Accumulate everything into one big blob
-        if (finalTranscript) {
-          fullText += finalTranscript;
-          console.log('🎤 Captured:', finalTranscript);
-          setFullTranscript(fullText);
-        }
-        
-        if (interimTranscript) {
-          setLastInterimTranscript(interimTranscript.trim());
-        }
-      };
-      
-      recognition.onerror = (event: any) => {
-        console.error('🎤 Speech error:', event.error);
-        setIsListening(false);
-        
-        if (event.error === 'not-allowed') {
-          console.error('🎤 Microphone access denied');
-          return;
-        }
-        
-        // Retry on recoverable errors
-        if (event.error === 'no-speech' || event.error === 'audio-capture') {
-          setTimeout(() => {
-            if (isCallActive && recognitionRef.current) {
-              try {
-                recognitionRef.current.start();
-              } catch (error) {
-                console.log('🔄 Retry failed');
-              }
-            }
-          }, 3000);
-        }
-      };
-      
-      recognition.onend = () => {
-        console.log('🎤 Speech recognition ended');
-        setIsListening(false);
-        
-        // Restart if call is still active
-        if (isCallActive && recognitionRef.current) {
-          setTimeout(() => {
-            try {
-              recognitionRef.current.start();
-            } catch (error) {
-              console.log('🔄 Auto-restart failed');
-            }
-          }, 1000);
-        }
-      };
-      
-      setRecognition(recognition);
-      recognitionRef.current = recognition;
-    } else {
-      console.log('🎤 Speech recognition not supported');
-    }
-  }, []);
-
-  // Start/stop speech recognition and audio recording when call is active
-  useEffect(() => {
-    console.log('🔄 ===== CALL ACTIVE STATE CHANGED =====');
-    console.log('🔄 Call active:', isCallActive);
-    console.log('🔄 Recognition ref exists:', !!recognitionRef.current);
-    
-    if (isCallActive) {
-      // Start speech recognition
-      if (recognitionRef.current) {
+    if (isCallActive && conversationData?.conversation_id) {
+      // Start polling for transcript data every 2 seconds
+      transcriptPollingRef.current = setInterval(async () => {
         try {
-          console.log('🎤 ===== STARTING SPEECH RECOGNITION =====');
-          recognitionRef.current.start();
-          console.log('🎤 Speech recognition started successfully');
+          const response = await fetch(`/api/tavus/transcript?conversation_id=${conversationData.conversation_id}`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.transcript_entries && data.transcript_entries.length > 0) {
+              const newEntries = data.transcript_entries.map((entry: any) => ({
+                id: entry.id || `transcript_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                text: entry.text || '',
+                isUser: entry.isUser || false,
+                timestamp: entry.timestamp ? new Date(entry.timestamp) : new Date()
+              }));
+              
+              setTranscript(prev => {
+                // Only add new entries that don't already exist
+                const existingIds = new Set(prev.map(item => item.id));
+                const newUniqueEntries = newEntries.filter((entry: any) => !existingIds.has(entry.id));
+                return [...prev, ...newUniqueEntries];
+              });
+            }
+          }
         } catch (error) {
-          console.error('🎤 ===== SPEECH RECOGNITION START FAILED =====');
-          console.error('🎤 Error:', error);
+          console.error('Error polling transcript:', error);
+        }
+      }, 2000);
+    } else {
+      if (transcriptPollingRef.current) {
+        clearInterval(transcriptPollingRef.current);
+        transcriptPollingRef.current = null;
+      }
+    }
+
+    return () => {
+      if (transcriptPollingRef.current) {
+        clearInterval(transcriptPollingRef.current);
+      }
+    };
+  }, [isCallActive, conversationData?.conversation_id]);
+
+  // Speech recognition effect
+  useEffect(() => {
+    if (isCallActive && typeof window !== 'undefined') {
+      // Initialize speech recognition
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        
+        recognition.onstart = () => {
+          console.log('🎤 Speech recognition started');
+          setIsListening(true);
+        };
+        
+        recognition.onresult = (event: any) => {
+          const current = event.resultIndex;
+          const transcript = event.results[current][0].transcript;
+          const isFinal = event.results[current].isFinal;
+          
+          if (isFinal && transcript.trim()) {
+            // Determine speaker based on current transcript length (index-based)
+            setTranscript(prev => {
+              const isUser = prev.length % 2 === 0; // Even index = User, Odd index = Tavus
+              const speaker = isUser ? 'User' : 'Tavus';
+              console.log(`🎤 ${speaker} speech detected (index ${prev.length}):`, transcript);
+              
+              const newEntry = {
+                id: `${isUser ? 'user' : 'tavus'}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                text: transcript.trim(),
+                isUser: isUser,
+                timestamp: new Date()
+              };
+              
+              return [...prev, newEntry];
+            });
+            
+            lastTranscriptTimeRef.current = Date.now();
+          }
+        };
+        
+        recognition.onerror = (event: any) => {
+          console.error('🎤 Speech recognition error:', event.error);
+          setIsListening(false);
+        };
+        
+        recognition.onend = () => {
+          console.log('🎤 Speech recognition ended');
+          setIsListening(false);
+          
+          // Restart recognition after a short delay
+          if (isCallActive) {
+            setTimeout(() => {
+              try {
+                recognition.start();
+              } catch (error) {
+                console.log('🎤 Speech recognition restart failed:', error);
+              }
+            }, 100);
+          }
+        };
+        
+        speechRecognitionRef.current = recognition;
+        
+        // Start speech recognition
+        try {
+          recognition.start();
+        } catch (error) {
+          console.error('🎤 Failed to start speech recognition:', error);
         }
       } else {
-        console.error('🎤 ===== NO RECOGNITION REF AVAILABLE =====');
+        console.warn('🎤 Speech recognition not supported in this browser');
       }
-
-      // Start audio recording
-      console.log('🎵 Starting audio recording...');
-      startAudioRecording();
     } else {
-      // Stop speech recognition
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-          console.log('🎤 Stopping speech recognition');
-        } catch (error) {
-          console.log('🎤 Could not stop speech recognition:', error);
-        }
+      // Stop speech recognition when call ends
+      if (speechRecognitionRef.current) {
+        speechRecognitionRef.current.stop();
+        speechRecognitionRef.current = null;
       }
-
-      // Stop audio recording
-      console.log('🎵 Stopping audio recording...');
-      stopAudioRecording();
+      setIsListening(false);
     }
+    
+    return () => {
+      if (speechRecognitionRef.current) {
+        speechRecognitionRef.current.stop();
+        speechRecognitionRef.current = null;
+      }
+    };
   }, [isCallActive]);
 
-  // Audio recording functions
-  const startAudioRecording = async () => {
-    try {
-      console.log('🎵 Requesting microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100
-        } 
-      });
-      audioStreamRef.current = stream;
-      console.log('🎵 Microphone access granted, stream:', stream);
-      
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-      mediaRecorderRef.current = mediaRecorder;
-      
-      const chunks: Blob[] = [];
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunks.push(event.data);
-          console.log('🎵 Audio data chunk received:', event.data.size, 'bytes');
-        }
-      };
-      
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        setAudioChunks(prev => {
-          const newChunks = [...prev, audioBlob];
-          console.log('🎵 Total audio chunks:', newChunks.length);
-          return newChunks;
-        });
-        console.log('🎵 Audio chunk recorded:', audioBlob.size, 'bytes');
-      };
-      
-      mediaRecorder.onerror = (event) => {
-        console.error('🎵 MediaRecorder error:', event);
-      };
-      
-      mediaRecorder.start(1000); // Record in 1-second chunks
-      setIsRecording(true);
-      console.log('🎵 Audio recording started with MediaRecorder');
-    } catch (error) {
-      console.error('🎵 Could not start audio recording:', error);
-    }
+  // Simple function to manually switch turns
+  const switchTurn = () => {
+    setIsUserTurn(!isUserTurn);
+    console.log(`🔄 Manually switched to ${!isUserTurn ? 'User' : 'Tavus'} turn`);
   };
 
-  const stopAudioRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-    setIsRecording(false);
-    console.log('🎵 Audio recording stopped');
+  // Function to switch speaker of a specific message
+  const switchMessageSpeaker = (messageId: string) => {
+    setTranscript(prev => 
+      prev.map(entry => 
+        entry.id === messageId 
+          ? { ...entry, isUser: !entry.isUser }
+          : entry
+      )
+    );
+    console.log(`🔄 Switched speaker for message ${messageId}`);
   };
-
-  // Periodic transcript capture as fallback
-  useEffect(() => {
-    if (isCallActive && iframeRef.current) {
-      const captureTranscript = () => {
-        try {
-          // Try to capture transcript from iframe
-          if (iframeRef.current && iframeRef.current.contentWindow) {
-            iframeRef.current.contentWindow.postMessage({
-              type: 'get_transcript'
-            }, '*');
-          }
-        } catch (error) {
-          console.log('Could not capture transcript from iframe:', error);
-        }
-      };
-
-      // Capture transcript every 5 seconds
-      const transcriptInterval = setInterval(captureTranscript, 5000);
-      
-      return () => clearInterval(transcriptInterval);
-    }
-  }, [isCallActive]);
 
   const startConversation = async () => {
     setIsLoading(true);
@@ -329,292 +254,48 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     }
   };
 
-  // Listen for messages from Tavus iframe (user speech + Tavus speech confirmation)
-  useEffect(() => {
-  const handleMessage = (event: MessageEvent) => {
-    console.log('🔍 Tavus message:', event.data?.type);
-    
-    // Handle user speech from iframe
-    if (event.data.type === 'transcript' && event.data.text) {
-      console.log('📝 User transcript:', event.data.text);
-      sendToTavus(event.data.text);
-    } else if (event.data.type === 'user_speech' && event.data.transcript) {
-      console.log('🎤 User speech:', event.data.transcript);
-      sendToTavus(event.data.transcript);
-    } 
-    // Handle Tavus responses
-    else if (event.data.type === 'tavus_response' || event.data.type === 'student_response' || event.data.type === 'avatar_response') {
-      console.log('🎭 Tavus responded:', event.data.text || event.data.message);
-      
-      // Add Tavus response to transcript
-      const tavusMessage: Message = {
-        id: Date.now().toString(),
-        text: event.data.text || event.data.message || 'Tavus responded',
-        isUser: false, // Tavus is the student
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, tavusMessage]);
-    }
-    // Handle Tavus speech events
-    else if (event.data.type === 'speaking_started' || event.data.type === 'speech_started') {
-      console.log('🎭 Tavus started speaking');
-      setIsTavusSpeaking(true);
-    }
-    else if (event.data.type === 'speak_response' || event.data.type === 'speech_complete' || event.data.type === 'speaking_finished') {
-      console.log('🎭 Tavus finished speaking');
-      setIsTavusSpeaking(false);
-    }
-  };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-
-  // Simple function to send message to Tavus (no transcript splitting)
-  const sendToTavus = async (text: string) => {
-    console.log('📤 Sending to Tavus:', text);
-    
-    if (iframeRef.current) {
-      const messageToSend = {
-        type: 'user_message',
-        text: text.trim(),
-        timestamp: new Date().toISOString()
-      };
-      
-      try {
-        iframeRef.current.contentWindow?.postMessage(messageToSend, '*');
-        console.log('📤 Message sent');
-      } catch (error) {
-        console.error('❌ Send failed:', error);
-      }
-    } else {
-      console.error('❌ Iframe not available');
-    }
-  };
-
-  // Function to split and label transcript using OpenAI with 3 epochs
-  const formatTranscriptWithOpenAI = async (fullText: string) => {
-    try {
-      console.log('🧹 Splitting transcript through 3 epochs...');
-      
-      const response = await fetch('/api/chat/process-transcript', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          fullText: fullText,
-          studentName: student.name
-        }),
-      });
-
-      if (response.ok) {
-        const formattedData = await response.json();
-        console.log('🧹 Transcript split and labeled successfully');
-        return formattedData.transcript;
-      } else {
-        console.error('❌ 3-epoch splitting failed, using fallback');
-        return [{
-          id: Date.now().toString(),
-          text: fullText,
-          isUser: true,
-          timestamp: new Date().toISOString()
-        }];
-      }
-    } catch (error) {
-      console.error('❌ 3-epoch splitting error:', error);
-      return [{
-        id: Date.now().toString(),
-        text: fullText,
-        isUser: true,
-        timestamp: new Date().toISOString()
-      }];
-    }
-  };
-
   const endCall = async () => {
     setIsCallActive(false);
     
     console.log('🛑 Ending call...');
-    console.log('📊 Current messages count:', messages.length);
-    console.log('📝 Current messages:', messages);
     console.log('⏱️ Call duration:', callDuration);
+    console.log('📝 Transcript entries:', transcript.length);
     
-    // Capture any pending interim transcript before ending
-    if (recognitionRef.current && recognitionRef.current.state === 'listening') {
+    // Save transcript to chat log if we have entries
+    if (transcript.length > 0 && user) {
       try {
-        console.log('🎤 Capturing final interim transcript before ending call...');
-        recognitionRef.current.stop();
-        
-        // Wait a moment for any final processing
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await fetch('/api/chat/log', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId: user._id || user.email, // Use _id or email as fallback
+            studentId: student.id,
+            studentName: student.name,
+            studentSubject: student.subject,
+            transcript: transcript,
+            conversationLength: callDuration,
+            type: 'tavus_video_session',
+            sessionId: sessionId,
+            duration: callDuration
+          }),
+        });
+        console.log('✅ Transcript saved to chat log');
       } catch (error) {
-        console.log('🎤 Error stopping recognition:', error);
+        console.error('❌ Error saving transcript:', error);
       }
     }
     
-    try {
-    // Use the big blob transcript we've been accumulating
-    let finalTranscript = fullTranscript;
-    
-    // Add any remaining interim transcript
-    if (lastInterimTranscript && lastInterimTranscript.split(' ').length > 2) {
-      console.log('🎤 Adding final interim transcript:', lastInterimTranscript);
-      finalTranscript += ' ' + lastInterimTranscript;
-    }
-    
-    console.log('📋 Final transcript length:', finalTranscript.length);
-    
-    // Split and label the big blob using OpenAI with 3 epochs
-    let formattedTranscript;
-    try {
-      console.log('🔄 Starting 3-epoch splitting...');
-      formattedTranscript = await formatTranscriptWithOpenAI(finalTranscript);
-      console.log('📋 3-epoch splitting complete:', formattedTranscript.length, 'messages');
-    } catch (formatError) {
-      console.error('❌ 3-epoch splitting failed, using fallback');
-      formattedTranscript = [{
-        id: Date.now().toString(),
-        text: finalTranscript,
-        isUser: true,
-        timestamp: new Date().toISOString()
-      }];
-    }
-      // If no transcript captured, create a minimal one
-      if (formattedTranscript.length === 0) {
-        console.log('⚠️ No conversation captured, creating minimal transcript');
-        formattedTranscript = [{
-          id: 'session_started',
-          text: 'Session started - no conversation captured',
-          isUser: false,
-          timestamp: new Date().toISOString()
-        }];
-      }
-
-      console.log('📋 Final formatted transcript:', formattedTranscript);
-
-      // Create audio URL from recorded chunks
-      let audioUrl = '';
-      console.log('🎵 Audio chunks count:', audioChunks.length);
-      console.log('🎵 Audio chunks details:', audioChunks.map((chunk, i) => ({ index: i, size: chunk.size, type: chunk.type })));
-      
-      if (audioChunks.length > 0) {
-        try {
-          const finalAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          console.log('🎵 Final audio blob size:', finalAudioBlob.size, 'bytes');
-          console.log('🎵 Final audio blob type:', finalAudioBlob.type);
-          
-          // Convert blob to data URL synchronously
-          const reader = new FileReader();
-          const audioDataUrl = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => {
-              console.log('🎵 FileReader onload triggered');
-              resolve(reader.result as string);
-            };
-            reader.onerror = (error) => {
-              console.error('🎵 FileReader error:', error);
-              reject(new Error('Failed to read audio blob'));
-            };
-            reader.readAsDataURL(finalAudioBlob);
-          });
-          
-          audioUrl = audioDataUrl;
-          console.log('🎵 Audio URL created successfully, length:', audioUrl.length);
-          console.log('🎵 Audio URL preview:', audioUrl.substring(0, 100) + '...');
-        } catch (error) {
-          console.error('🎵 Error creating audio URL:', error);
-          audioUrl = `data:audio/wav;base64,${btoa('Audio recording failed')}`;
-        }
-      } else {
-        console.log('🎵 No audio chunks recorded - creating placeholder');
-        audioUrl = `data:audio/wav;base64,${btoa('No audio recorded')}`;
-      }
-
-      // Create session data matching your database structure
-      const sessionData = {
-        userId: user?._id || (user as any)?.sub || 'demo-user-id',
-        studentId: student.id,
-        studentName: student.name,
-        studentSubject: student.subject,
-        transcript: formattedTranscript,
-        conversationCount: formattedTranscript.length,
-        conversationLength: callDuration,
-        audioUrl: audioUrl,
-        createdAt: new Date().toISOString(),
-        endedAt: new Date().toISOString(),
-        type: 'tavus_video_session',
-        sessionId: sessionId,
-        duration: callDuration
-      };
-
-      console.log('💾 Uploading session data:', sessionData);
-
-      // Upload to database
-      const response = await fetch('/api/chat/log', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(sessionData),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        console.log('✅ Session data uploaded successfully to database');
-        console.log('📊 Session ID:', result.sessionId);
-        console.log('📊 Full response:', result);
-        
-        // Redirect to review page using the MongoDB sessionId
-        const reviewSessionId = result.sessionId || sessionId;
-        console.log('🔄 Redirecting to review page:', `/review/${reviewSessionId}`);
-        router.push(`/review/${reviewSessionId}`);
-      } else {
-        const errorText = await response.text();
-        console.error('❌ Failed to upload session data:', response.status, errorText);
-        // Still redirect to review page even if upload fails, using local sessionId
-        console.log('🔄 Redirecting to review page (fallback):', `/review/${sessionId}`);
-        router.push(`/review/${sessionId}`);
-      }
-    } catch (error) {
-      console.error('❌ Error uploading session data:', error);
-      // Still redirect to review page even if upload fails, using local sessionId
-      console.log('🔄 Redirecting to review page (error fallback):', `/review/${sessionId}`);
-      router.push(`/review/${sessionId}`);
-    }
-
-    // Stop speech recognition
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (error) {
-        console.log('Could not stop speech recognition:', error);
-      }
-    }
-
     // Reset state
     setConversationData(null);
-    setMessages([]);
     setCallDuration(0);
     setSessionId(null);
-    setIsListening(false);
+    setTranscript([]);
+    setIsTranscriptVisible(false);
     
     onEnd?.();
   };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (error) {
-          console.log('Could not stop speech recognition on unmount:', error);
-        }
-      }
-    };
-  }, []);
 
   // Format call duration
   const formatDuration = (seconds: number) => {
@@ -668,6 +349,72 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             </div>
           </div>
 
+          {/* Transcript Panel - Slide out from right */}
+          {isTranscriptVisible && (
+            <div className="absolute top-0 right-0 w-80 h-full bg-black bg-opacity-90 text-white z-30 overflow-hidden">
+              <div className="p-4 border-b border-gray-600 flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Live Transcript</h3>
+                <button
+                  onClick={() => setIsTranscriptVisible(false)}
+                  className="text-gray-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {transcript.length === 0 ? (
+                  <div className="text-center text-gray-400 py-8">
+                    <div className="animate-pulse">Waiting for conversation...</div>
+                    <div className="text-xs mt-2 opacity-75">
+                      Your speech will be transcribed automatically
+                    </div>
+                  </div>
+                ) : (
+                  transcript.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className={`p-3 rounded-lg ${
+                        entry.isUser
+                          ? 'bg-blue-600 ml-8'
+                          : 'bg-gray-700 mr-8'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="text-sm font-medium">
+                          {entry.isUser ? 'You' : student.name}
+                        </div>
+                        <button
+                          onClick={() => switchMessageSpeaker(entry.id)}
+                          className="text-xs bg-black bg-opacity-30 hover:bg-opacity-50 text-white px-2 py-1 rounded transition-colors"
+                          title="Switch speaker"
+                        >
+                          🔄
+                        </button>
+                      </div>
+                      <div className="text-sm">{entry.text}</div>
+                      <div className="text-xs opacity-75 mt-1">
+                        {new Date(entry.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  ))
+                )}
+                
+                {/* Turn indicator */}
+                {transcript.length > 0 && (
+                  <div className="text-center text-gray-500 text-xs mt-4 p-2 bg-gray-800 rounded">
+                    <div className="flex items-center justify-center space-x-2">
+                      <div className={`w-2 h-2 rounded-full ${transcript.length % 2 === 0 ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                      <span>Next turn: {transcript.length % 2 === 0 ? 'You' : 'Tavus'}</span>
+                    </div>
+                    <div className="text-xs mt-1 opacity-75">
+                      Auto-alternating based on message count
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Bottom Controls - Fixed layout */}
           <div className="absolute bottom-4 left-4 right-4 z-20">
             {/* Top row - Status indicators */}
@@ -681,6 +428,22 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                   </div>
                 )}
                 
+                {/* Speech recognition indicator */}
+                {isListening && (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                    <span className="text-sm text-gray-300">Listening...</span>
+                  </div>
+                )}
+                
+                {/* Current turn indicator */}
+                <div className="flex items-center space-x-2">
+                  <div className={`w-3 h-3 rounded-full ${transcript.length % 2 === 0 ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                  <span className="text-sm text-gray-300">
+                    {transcript.length % 2 === 0 ? 'Your turn' : 'Tavus turn'}
+                  </span>
+                </div>
+                
                 {/* Progress dots */}
                 <div className="flex space-x-1">
                   <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
@@ -689,41 +452,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                   <div className="w-2 h-2 bg-purple-300 rounded-full"></div>
                   <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
                 </div>
-
-                {/* Debug: Show message count */}
-                <div className="text-xs text-gray-300">
-                  Messages: {messages.length}
-                </div>
-
-                {/* Debug: Show full transcript */}
-                <div className="text-xs text-gray-300">
-                  Full Transcript: {fullTranscript.length} chars
-                </div>
-
-                {/* Speech recognition status */}
-                <div className="flex items-center space-x-2">
-                  <div className={`w-2 h-2 rounded-full ${isListening ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                  <span className="text-xs text-gray-300">
-                    {isListening ? 'Listening' : 'Not listening'}
-                  </span>
-                </div>
-
-                {/* Audio recording status */}
-                <div className="flex items-center space-x-2">
-                  <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-blue-500 animate-pulse' : 'bg-gray-500'}`}></div>
-                  <span className="text-xs text-gray-300">
-                    {isRecording ? 'Recording' : 'Not recording'}
-                  </span>
-                </div>
-
-                {/* Tavus speaking status */}
-                <div className="flex items-center space-x-2">
-                  <div className={`w-2 h-2 rounded-full ${isTavusSpeaking ? 'bg-purple-500 animate-pulse' : 'bg-gray-500'}`}></div>
-                  <span className="text-xs text-gray-300">
-                    {isTavusSpeaking ? 'Student speaking' : 'Student quiet'}
-                  </span>
-                </div>
-
               </div>
 
               {/* Call Duration */}
@@ -735,140 +463,46 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             {/* Bottom row - Controls */}
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                {/* Manual transcript input for testing */}
+                {/* Transcript Toggle Button */}
+                <button
+                  onClick={() => setIsTranscriptVisible(!isTranscriptVisible)}
+                  className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center space-x-2"
+                >
+                  <span>📝</span>
+                  <span>Transcript</span>
+                  {transcript.length > 0 && (
+                    <span className="bg-blue-500 text-xs px-2 py-1 rounded-full">
+                      {transcript.length}
+                    </span>
+                  )}
+                </button>
+                
+                {/* Manual Tavus Response Button (for testing) */}
                 <button
                   onClick={() => {
-                    const testMessage: Message = {
-                      id: Date.now().toString(),
-                      text: 'This is a test message to verify transcript capture',
-                      isUser: true,
+                    const testResponse = "This is a test response from Tavus. How can I help you today?";
+                    const newEntry = {
+                      id: `tavus_manual_${Date.now()}`,
+                      text: testResponse,
+                      isUser: false,
                       timestamp: new Date()
                     };
-                    setMessages(prev => [...prev, testMessage]);
-                    console.log('🧪 Added test message:', testMessage);
+                    setTranscript(prev => [...prev, newEntry]);
+                    console.log('🤖 Manual Tavus response added:', testResponse);
                   }}
-                  className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-xs"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
-                  Test
+                  + Tavus
                 </button>
-
-                {/* Test transcript formatting */}
+                
+                {/* Switch Turn Button */}
                 <button
-                  onClick={async () => {
-                    console.log('🧪 Testing transcript formatting...');
-                    const testText = "Hello there how are you doing today I'm doing great thanks for asking what can I help you with";
-                    console.log('🧪 Original test text:', testText);
-                    try {
-                      const formatted = await formatTranscriptWithOpenAI(testText);
-                      console.log('🧪 Test result:', formatted);
-                      console.log('🧪 Preserved text:', formatted.map((msg: any) => msg.text).join(' '));
-                    } catch (error) {
-                      console.error('🧪 Test failed:', error);
-                    }
-                  }}
-                  className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-xs"
+                  onClick={switchTurn}
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
-                  Test Format
+                  🔄 Switch
                 </button>
-
-                {/* Test current transcript formatting */}
-                <button
-                  onClick={async () => {
-                    console.log('🧪 Testing current transcript...');
-                    console.log('🧪 Original text:', fullTranscript);
-                    try {
-                      const formatted = await formatTranscriptWithOpenAI(fullTranscript);
-                      console.log('🧪 Current result:', formatted);
-                      console.log('🧪 Preserved text:', formatted.map((msg: any) => msg.text).join(' '));
-                    } catch (error) {
-                      console.error('🧪 Current test failed:', error);
-                    }
-                  }}
-                  className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1 rounded text-xs"
-                >
-                  Format Current
-                </button>
-
-                {/* Direct API test */}
-                <button
-                  onClick={async () => {
-                    console.log('🧪 ===== TESTING DIRECT API CALL =====');
-                    try {
-                      const response = await fetch('/api/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          message: 'I need help with algebra',
-                          studentId: student.id,
-                          userId: (user as any)?.sub,
-                          conversationHistory: []
-                        })
-                      });
-                      
-                      const data = await response.json();
-                      console.log('🧪 Direct API response:', data);
-                      console.log('🧪 Response text:', data.response);
-                    } catch (error) {
-                      console.error('🧪 Direct API test failed:', error);
-                    }
-                  }}
-                  className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded text-xs"
-                >
-                  Test API
-                </button>
-
-                {/* Manual speech recognition toggle */}
-                <button
-                  onClick={() => {
-                    if (recognitionRef.current) {
-                      if (isListening) {
-                        recognitionRef.current.stop();
-                      } else {
-                        recognitionRef.current.start();
-                      }
-                    }
-                  }}
-                  className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-xs"
-                >
-                  {isListening ? 'Stop Mic' : 'Start Mic'}
-                </button>
-
-                {/* Audio recording test */}
-                <button
-                  onClick={async () => {
-                    console.log('🎵 Audio chunks count:', audioChunks.length);
-                    console.log('🎵 Audio chunks:', audioChunks);
-                    console.log('🎵 Recording state:', isRecording);
-                    console.log('🎵 MediaRecorder state:', mediaRecorderRef.current?.state);
-                    console.log('🎵 Audio stream:', audioStreamRef.current);
-                    console.log('🎵 Call active:', isCallActive);
-                    
-                    // Test manual audio recording
-                    if (!isRecording) {
-                      console.log('🎵 Testing manual audio recording...');
-                      await startAudioRecording();
-                    } else {
-                      console.log('🎵 Testing manual audio stop...');
-                      stopAudioRecording();
-                    }
-                  }}
-                  className="bg-purple-500 hover:bg-purple-600 text-white px-3 py-1 rounded text-xs"
-                >
-                  Audio Debug
-                </button>
-
-
-                {/* Test sendToTavus directly */}
-                <button
-                  onClick={() => {
-                    console.log('🧪 Testing Tavus...');
-                    sendToTavus('Hello, can you help me with math?');
-                  }}
-                  className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-xs"
-                >
-                  Test Tavus
-                </button>
-        </div>
+              </div>
         
               {/* End Call Button - Pink like uploaded design */}
           <button
