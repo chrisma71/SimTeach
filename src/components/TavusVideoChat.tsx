@@ -30,6 +30,9 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const [isListening, setIsListening] = useState(false);
   const [isTavusSpeaking, setIsTavusSpeaking] = useState(false);
   const [isUserTurn, setIsUserTurn] = useState(true); // Track whose turn it is
+  const [isMuted, setIsMuted] = useState(false);
+  const [isCameraOff, setIsCameraOff] = useState(false);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   
   // Refs
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -56,6 +59,34 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
+      }
+    };
+  }, [isCallActive]);
+
+  // Effect to get user's media stream for mute/camera controls
+  useEffect(() => {
+    if (isCallActive) {
+      navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
+      }).then(stream => {
+        setMediaStream(stream);
+        console.log('🎥 Media stream obtained for controls');
+      }).catch(error => {
+        console.error('❌ Error accessing media devices:', error);
+      });
+    } else {
+      // Stop all tracks when call ends
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        setMediaStream(null);
+      }
+    }
+
+    return () => {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        setMediaStream(null);
       }
     };
   }, [isCallActive]);
@@ -201,6 +232,30 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     console.log(`🔄 Manually switched to ${!isUserTurn ? 'User' : 'Tavus'} turn`);
   };
 
+  // Toggle mute functionality
+  const toggleMute = () => {
+    if (mediaStream) {
+      const audioTracks = mediaStream.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = isMuted; // If currently muted, enable it (unmute)
+      });
+      setIsMuted(!isMuted);
+      console.log(`🎤 ${isMuted ? 'Unmuted' : 'Muted'} microphone`);
+    }
+  };
+
+  // Toggle camera functionality
+  const toggleCamera = () => {
+    if (mediaStream) {
+      const videoTracks = mediaStream.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = isCameraOff; // If currently off, enable it (turn on)
+      });
+      setIsCameraOff(!isCameraOff);
+      console.log(`📹 Camera ${isCameraOff ? 'enabled' : 'disabled'}`);
+    }
+  };
+
   // Function to switch speaker of a specific message
   const switchMessageSpeaker = (messageId: string) => {
     setTranscript(prev => 
@@ -301,12 +356,18 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
       }
     }
     
-    // Reset state
-    setConversationData(null);
-    setCallDuration(0);
-    setSessionId(null);
-    setTranscript([]);
-    setIsTranscriptVisible(false);
+        // Reset state
+        setConversationData(null);
+        setCallDuration(0);
+        setSessionId(null);
+        setTranscript([]);
+        setIsTranscriptVisible(false);
+        
+        // Clean up media stream
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(track => track.stop());
+          setMediaStream(null);
+        }
     
     // Redirect to review page for this specific case
     if (savedCaseId) {
@@ -345,17 +406,17 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             border: none !important;
           }
         `}</style>
-        {/* Single Video Call Interface - True full screen */}
-        <div className="w-screen h-screen relative">
+        {/* Single Video Call Interface - Adjust for transcript */}
+        <div className={`w-screen h-screen relative transition-all duration-300 ${isTranscriptVisible ? 'mr-80' : ''}`}>
           {/* Main Video Area - Full screen Tavus call */}
         <iframe
           ref={iframeRef}
           src={conversationData.conversation_url}
-            className="w-screen h-screen border-0 absolute inset-0"
+            className={`w-screen h-screen border-0 absolute inset-0 transition-all duration-300 ${isTranscriptVisible ? 'w-[calc(100vw-20rem)]' : ''}`}
           allow="camera; microphone; fullscreen; speaker; display-capture"
             title={`Video call with ${student.name}`}
           style={{ 
-              width: '100vw',
+              width: isTranscriptVisible ? 'calc(100vw - 20rem)' : '100vw',
               height: '100vh',
               position: 'fixed',
               top: 0,
@@ -368,21 +429,21 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
           />
           
           {/* Student Info Overlay - Dark overlay like uploaded design */}
-          <div className="absolute bottom-4 left-4 bg-black bg-opacity-70 text-white text-sm px-3 py-2 rounded-lg z-20">
+          <div className={`absolute bottom-20 left-4 bg-black bg-opacity-70 text-white text-sm px-4 py-3 rounded-lg z-20 transition-all duration-300 ${isTranscriptVisible ? 'right-80' : 'right-4'}`}>
             <div className="text-center">
-              <div className="font-bold text-base">{student.name}</div>
-              <div className="text-xs opacity-75">Student – Practice Teaching</div>
+              <div className="font-bold text-lg">{student.name}</div>
+              <div className="text-sm opacity-75">Student – Practice Teaching</div>
             </div>
           </div>
 
-          {/* Transcript Panel - Slide out from right */}
+          {/* Transcript Panel - Push content to the side */}
           {isTranscriptVisible && (
-            <div className="absolute top-0 right-0 w-80 h-full bg-black bg-opacity-90 text-white z-30 overflow-hidden">
+            <div className="fixed top-0 right-0 w-80 h-full bg-black bg-opacity-95 text-white z-30 overflow-hidden shadow-2xl">
               <div className="p-4 border-b border-gray-600 flex items-center justify-between">
                 <h3 className="text-lg font-semibold">Live Transcript</h3>
                 <button
                   onClick={() => setIsTranscriptVisible(false)}
-                  className="text-gray-400 hover:text-white"
+                  className="text-gray-400 hover:text-white text-xl font-bold"
                 >
                   ✕
                 </button>
@@ -399,26 +460,27 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                   transcript.map((entry) => (
                     <div
                       key={entry.id}
-                      className={`p-3 rounded-lg ${
+                      className={`p-4 rounded-xl shadow-lg ${
                         entry.isUser
-                          ? 'bg-blue-600 ml-8'
-                          : 'bg-gray-700 mr-8'
+                          ? 'bg-blue-600 ml-4 border-l-4 border-blue-400'
+                          : 'bg-gray-700 mr-4 border-l-4 border-gray-500'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="text-sm font-medium">
-                          {entry.isUser ? 'You' : student.name}
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-sm font-bold flex items-center space-x-2">
+                          <span className={`w-2 h-2 rounded-full ${entry.isUser ? 'bg-blue-300' : 'bg-gray-400'}`}></span>
+                          <span>{entry.isUser ? 'You' : student.name}</span>
                         </div>
                         <button
                           onClick={() => switchMessageSpeaker(entry.id)}
-                          className="text-xs bg-black bg-opacity-30 hover:bg-opacity-50 text-white px-2 py-1 rounded transition-colors"
+                          className="text-xs bg-black bg-opacity-40 hover:bg-opacity-60 text-white px-3 py-1 rounded-lg transition-colors font-medium"
                           title="Switch speaker"
                         >
-                          🔄
+                          🔄 Switch
                         </button>
                       </div>
-                      <div className="text-sm">{entry.text}</div>
-                      <div className="text-xs opacity-75 mt-1">
+                      <div className="text-sm leading-relaxed mb-2">{entry.text}</div>
+                      <div className="text-xs opacity-75 text-right">
                         {new Date(entry.timestamp).toLocaleTimeString()}
                       </div>
                     </div>
@@ -441,102 +503,105 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             </div>
           )}
 
-          {/* Bottom Controls - Fixed layout */}
-          <div className="absolute bottom-4 left-4 right-4 z-20">
+          {/* Bottom Controls - Fixed layout with better spacing */}
+          <div className={`absolute bottom-4 left-4 z-20 transition-all duration-300 ${isTranscriptVisible ? 'right-80' : 'right-4'}`}>
             {/* Top row - Status indicators */}
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center space-x-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-6">
                 {/* Loading indicator */}
                 {isConnecting && (
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
                     <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-sm text-gray-300">Connecting...</span>
+                    <span className="text-sm text-white font-medium">Connecting...</span>
                   </div>
                 )}
                 
                 {/* Speech recognition indicator */}
                 {isListening && (
-                  <div className="flex items-center space-x-2">
-                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-                    <span className="text-sm text-gray-300">Listening...</span>
+                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
+                    <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
+                    <span className="text-sm text-white font-medium">Listening...</span>
                   </div>
                 )}
                 
-                {/* Current turn indicator */}
-                <div className="flex items-center space-x-2">
-                  <div className={`w-3 h-3 rounded-full ${transcript.length % 2 === 0 ? 'bg-green-500' : 'bg-blue-500'}`}></div>
-                  <span className="text-sm text-gray-300">
-                    {transcript.length % 2 === 0 ? 'Your turn' : 'Tavus turn'}
-                  </span>
-                </div>
-                
-                {/* Progress dots */}
-                <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                  <div className="w-2 h-2 bg-purple-300 rounded-full"></div>
-                  <div className="w-2 h-2 bg-purple-300 rounded-full"></div>
-                  <div className="w-2 h-2 bg-purple-300 rounded-full"></div>
-                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                </div>
+                  {/* Mute status indicator */}
+                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
+                    <div className={`w-4 h-4 rounded-full ${isMuted ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                    <span className="text-sm text-white font-medium">
+                      {isMuted ? 'Muted' : 'Unmuted'}
+                    </span>
+                  </div>
+                  
+                  {/* Camera status indicator */}
+                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
+                    <div className={`w-4 h-4 rounded-full ${isCameraOff ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                    <span className="text-sm text-white font-medium">
+                      {isCameraOff ? 'Camera Off' : 'Camera On'}
+                    </span>
+                  </div>
               </div>
 
               {/* Call Duration */}
-              <div className="text-sm text-white">
-                {formatDuration(callDuration)}
+              <div className="bg-black bg-opacity-50 px-4 py-2 rounded-lg">
+                <div className="text-lg font-bold text-white">
+                  {formatDuration(callDuration)}
+                </div>
               </div>
             </div>
 
             {/* Bottom row - Controls */}
             <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-4">
                 {/* Transcript Toggle Button */}
                 <button
                   onClick={() => setIsTranscriptVisible(!isTranscriptVisible)}
-                  className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center space-x-2"
+                  className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center space-x-3 shadow-lg ${
+                    isTranscriptVisible 
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                      : 'bg-white bg-opacity-90 hover:bg-opacity-100 text-gray-800'
+                  }`}
                 >
-                  <span>📝</span>
+                  <span className="text-lg">📝</span>
                   <span>Transcript</span>
                   {transcript.length > 0 && (
-                    <span className="bg-blue-500 text-xs px-2 py-1 rounded-full">
+                    <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full font-bold">
                       {transcript.length}
                     </span>
                   )}
                 </button>
                 
-                {/* Manual Tavus Response Button (for testing) */}
-                <button
-                  onClick={() => {
-                    const testResponse = "This is a test response from Tavus. How can I help you today?";
-                    const newEntry = {
-                      id: `tavus_manual_${Date.now()}`,
-                      text: testResponse,
-                      isUser: false,
-                      timestamp: new Date()
-                    };
-                    setTranscript(prev => [...prev, newEntry]);
-                    console.log('🤖 Manual Tavus response added:', testResponse);
-                  }}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-                >
-                  + Tavus
-                </button>
-                
-                {/* Switch Turn Button */}
-                <button
-                  onClick={switchTurn}
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-                >
-                  🔄 Switch
-                </button>
+            {/* Mute/Unmute Button */}
+            <button
+              onClick={toggleMute}
+              className={`px-5 py-3 rounded-xl font-semibold text-sm transition-all duration-200 shadow-lg ${
+                isMuted 
+                  ? 'bg-red-600 hover:bg-red-700 text-white' 
+                  : 'bg-green-600 hover:bg-green-700 text-white'
+              }`}
+            >
+              {isMuted ? '🎤 Unmute' : '🔇 Mute'}
+            </button>
+            
+            {/* Camera Toggle Button */}
+            <button
+              onClick={toggleCamera}
+              className={`px-5 py-3 rounded-xl font-semibold text-sm transition-all duration-200 shadow-lg ${
+                isCameraOff 
+                  ? 'bg-red-600 hover:bg-red-700 text-white' 
+                  : 'bg-green-600 hover:bg-green-700 text-white'
+              }`}
+            >
+              {isCameraOff ? '📹 Camera On' : '📷 Camera Off'}
+            </button>
               </div>
         
-              {/* End Call Button - Pink like uploaded design */}
-          <button
+              {/* End Call Button - More prominent */}
+              <button
                 onClick={endCall}
-                className="bg-pink-500 hover:bg-pink-600 text-white px-6 py-3 rounded-lg font-medium transition-colors shadow-lg"
-          >
+                className="bg-red-500 hover:bg-red-600 text-white px-8 py-4 rounded-xl font-bold text-lg transition-all duration-200 shadow-xl hover:shadow-2xl transform hover:scale-105"
+              >
                 End Call
-          </button>
+              </button>
             </div>
           </div>
         </div>
