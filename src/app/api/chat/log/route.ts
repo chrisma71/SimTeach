@@ -29,7 +29,6 @@ export async function POST(request: NextRequest) {
       studentSubject, 
       transcript, 
       conversationLength,
-      audioData,
       type,
       sessionId,
       duration
@@ -105,7 +104,6 @@ export async function POST(request: NextRequest) {
       transcript: processedTranscript, // Use processed transcript
       conversationCount: conversationCount + 1,
       conversationLength: conversationLength || duration || 0,
-      audioUrl: audioData || undefined, // Store the base64 audio data
       createdAt: new Date(),
       endedAt: new Date(),
       type: type || 'tavus_video_session',

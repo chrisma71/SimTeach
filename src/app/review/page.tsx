@@ -61,20 +61,26 @@ export default function ReviewListPage() {
 
   return (
     <div className="min-h-screen bg-gray-100">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-4 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-800">Review Cases</h1>
-              <p className="text-gray-600 mt-2">Browse your conversation history</p>
-            </div>
+      {/* Action Buttons - Top Priority */}
+      <div className="bg-blue-600 text-white py-4">
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="flex items-center justify-center space-x-4">
             <Link 
               href="/talk"
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg transition-colors"
+              className="bg-white text-blue-600 hover:bg-gray-100 px-6 py-3 rounded-lg transition-colors font-semibold"
             >
               Start New Session
             </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-4 py-6">
+          <div className="text-center">
+            <h1 className="text-3xl font-bold text-gray-800">Review Cases</h1>
+            <p className="text-gray-600 mt-2">Browse your conversation history</p>
           </div>
         </div>
       </div>
@@ -106,9 +112,10 @@ export default function ReviewListPage() {
             {cases.map((caseItem) => {
               console.log('Rendering case item:', caseItem._id, 'type:', typeof caseItem._id);
               return (
-              <div
-                key={caseItem._id}
-                className="bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition-shadow"
+              <Link
+                key={caseItem._id?.toString() || Math.random()}
+                href={caseItem._id ? `/review/${String(caseItem._id)}` : '#'}
+                className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition-shadow cursor-pointer"
               >
                 <div className="p-6">
                   <div className="flex items-center justify-between">
@@ -143,19 +150,12 @@ export default function ReviewListPage() {
                         </p>
                       )}
                     </div>
-                    {caseItem._id ? (
-                      <Link
-                        href={`/review/${String(caseItem._id)}`}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors text-sm"
-                      >
-                        View Details
-                      </Link>
-                    ) : (
-                      <span className="text-gray-500 text-sm">No ID available</span>
-                    )}
+                    <div className="text-gray-400 text-sm">
+                      Click to view details →
+                    </div>
                   </div>
                 </div>
-              </div>
+              </Link>
               );
             })}
           </div>

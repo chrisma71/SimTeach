@@ -51,6 +51,13 @@ Please analyze this tutoring session and provide detailed feedback in the follow
     "subjectKnowledge": <number 1-10>
   },
   "recommendations": ["<recommendation 1>", "<recommendation 2>", "<recommendation 3>"],
+  "skillRecommendations": {
+    "rapport": ["<rapport-specific recommendation 1>", "<rapport-specific recommendation 2>"],
+    "questioningTechnique": ["<questioning-specific recommendation 1>", "<questioning-specific recommendation 2>"],
+    "patience": ["<patience-specific recommendation 1>", "<patience-specific recommendation 2>"],
+    "adaptability": ["<adaptability-specific recommendation 1>", "<adaptability-specific recommendation 2>"],
+    "subjectKnowledge": ["<knowledge-specific recommendation 1>", "<knowledge-specific recommendation 2>"]
+  },
   "studentEngagement": <number 1-10>,
   "keyMoments": [
     {
@@ -68,6 +75,13 @@ Please analyze this tutoring session and provide detailed feedback in the follow
 - Adaptability: Adjusting approach based on student needs
 - Subject Knowledge: Accuracy and depth of content knowledge
 - Student Engagement: How engaged was the student throughout?
+
+**Important for skillRecommendations:**
+- Provide 2 specific, actionable recommendations for each skill
+- Base recommendations on the actual performance observed in the conversation
+- Make recommendations specific to the skill (e.g., rapport recommendations should focus on relationship-building)
+- Use concrete examples from the conversation when possible
+- Keep recommendations practical and implementable
 
 Focus on constructive feedback that helps the tutor improve their skills.`;
 

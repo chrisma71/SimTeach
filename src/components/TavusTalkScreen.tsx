@@ -85,14 +85,59 @@ export default function TavusTalkScreen({ onEndCall }: TavusTalkScreenProps) {
             />
           </div>
         ) : (
-          <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
-            <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
+          <div className="space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Select a Student</h2>
+              <p className="text-gray-600">Choose a student to start your tutoring session</p>
             </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">No Student Selected</h2>
-            <p className="text-gray-600 mb-4">Please select a student to start the tutoring session.</p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {students.map((student) => {
+                const isAvailable = student.tavusConfig?.isAvailable;
+                return (
+                  <div
+                    key={student.id}
+                    className={`bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-6 ${
+                      isAvailable ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+                    }`}
+                    onClick={() => isAvailable && setSelectedStudent(student)}
+                  >
+                    <div className="flex items-center space-x-4 mb-4">
+                      <img
+                        src={student.thumbnail}
+                        alt={student.name}
+                        className="w-12 h-12 rounded-full object-cover"
+                      />
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-900">{student.name}</h3>
+                        <p className="text-sm text-gray-600">Grade {student.grade} • {student.subject}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2 mb-4">
+                      <p className="text-sm text-gray-600">{student.description}</p>
+                      <div className="flex flex-wrap gap-1">
+                        {student.struggles.slice(0, 2).map((struggle, index) => (
+                          <span key={index} className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded">
+                            {struggle}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {isAvailable ? (
+                      <div className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg text-center font-medium transition-colors">
+                        Start Session
+                      </div>
+                    ) : (
+                      <div className="w-full bg-gray-300 text-gray-600 py-2 px-4 rounded-lg text-center font-medium">
+                        Coming Soon
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>

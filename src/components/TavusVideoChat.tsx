@@ -247,7 +247,15 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
       
     } catch (error) {
       console.error('Error starting avatar session:', error);
-      setError(error instanceof Error ? error.message : 'Unknown error occurred');
+      
+      // Handle specific error cases
+      if (error instanceof Error && error.message.includes('Student not available')) {
+        setError('This student is coming soon! We\'re working on setting up their avatar.');
+      } else if (error instanceof Error && error.message.includes('configuration incomplete')) {
+        setError('This student\'s avatar is not fully configured yet.');
+      } else {
+        setError(error instanceof Error ? error.message : 'Unknown error occurred');
+      }
     } finally {
       setIsLoading(false);
       setIsConnecting(false);

@@ -149,8 +149,37 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Check if student has Tavus configuration
+      if (!student.tavusConfig || !student.tavusConfig.isAvailable) {
+        return NextResponse.json(
+          { 
+            error: 'Student not available for video sessions',
+            message: `${student.name} is coming soon! We're working on setting up their avatar.`,
+            studentName: student.name
+          },
+          { status: 503 }
+        );
+      }
+
       console.log('Found student:', student.name);
+      console.log('Student Tavus config:', student.tavusConfig);
       console.log('Creating new conversation...');
+
+      // Get student-specific Tavus configuration
+      const studentApiKey = process.env[`TAVUS_API_KEY_${student.tavusConfig.apiKeySuffix}`];
+      const studentReplicaId = student.tavusConfig.replicaId;
+      const studentPersonaId = student.tavusConfig.personaId;
+
+      if (!studentApiKey || !studentReplicaId || !studentPersonaId) {
+        return NextResponse.json(
+          { 
+            error: 'Student configuration incomplete',
+            message: `${student.name}'s avatar is not fully configured yet.`,
+            studentName: student.name
+          },
+          { status: 503 }
+        );
+      }
 
       // System prompt to disable Tavus response generation - only speak what we tell you
       const conversationalContext = generateSystemPrompt(student);
@@ -161,8 +190,8 @@ export async function POST(request: NextRequest) {
       
       // Simple avatar request with minimal properties - no custom greeting
       const requestBody = {
-        replica_id: replicaId,
-        persona_id: personaId,
+        replica_id: studentReplicaId,
+        persona_id: studentPersonaId,
         conversational_context: conversationalContext,
         callback_url: webhookUrl, // Add webhook URL for transcript updates
         properties: {
@@ -179,7 +208,7 @@ export async function POST(request: NextRequest) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
+          'x-api-key': studentApiKey,
         },
         body: JSON.stringify(requestBody),
       });

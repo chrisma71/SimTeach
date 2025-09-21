@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth0 } from '@/contexts/Auth0Context';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { students as allStudents } from '@/lib/students';
 
 interface StudentSession {
   studentId: string;
@@ -280,12 +281,27 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  <button
-                    onClick={() => handleContinueTutoring(student)}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors font-medium"
-                  >
-                    Continue Tutoring
-                  </button>
+                  {(() => {
+                    const studentConfig = allStudents.find(s => s.id === student.studentId);
+                    const isAvailable = studentConfig?.tavusConfig?.isAvailable;
+                    
+                    if (isAvailable) {
+                      return (
+                        <button
+                          onClick={() => handleContinueTutoring(student)}
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors font-medium"
+                        >
+                          Continue Tutoring
+                        </button>
+                      );
+                    } else {
+                      return (
+                        <div className="w-full bg-gray-300 text-gray-600 py-2 px-4 rounded-lg text-center font-medium cursor-not-allowed">
+                          Coming Soon
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
               </div>
             ))}

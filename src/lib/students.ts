@@ -10,6 +10,12 @@ export interface Student {
   strengths: string[];
   thumbnail: string;
   description: string;
+  tavusConfig?: {
+    apiKeySuffix: string;
+    replicaId: string;
+    personaId: string;
+    isAvailable: boolean;
+  };
 }
 
 export const students: Student[] = [
@@ -24,7 +30,13 @@ export const students: Student[] = [
     struggles: ["Exponent laws", "Algebraic equations", "Word problems"],
     strengths: ["Basic arithmetic", "Following instructions"],
     thumbnail: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&h=400&fit=crop&crop=face",
-    description: "A quiet student with autism who struggles with advanced math concepts but shows potential with proper guidance."
+    description: "A quiet student with autism who struggles with advanced math concepts but shows potential with proper guidance.",
+    tavusConfig: {
+      apiKeySuffix: "ALX",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   },
   {
     id: "2", 
@@ -37,7 +49,13 @@ export const students: Student[] = [
     struggles: ["Reading comprehension", "Essay structure", "Grammar"],
     strengths: ["Creative thinking", "Verbal communication"],
     thumbnail: "https://images.unsplash.com/photo-1494790108755-2616c9c1b983?w=400&h=400&fit=crop&crop=face",
-    description: "An energetic student who loves stories but needs help organizing her thoughts in writing."
+    description: "An energetic student who loves stories but needs help organizing her thoughts in writing.",
+    tavusConfig: {
+      apiKeySuffix: "MAY",
+      replicaId: process.env.TAVUS_REPLICA_ID_MAY || "",
+      personaId: process.env.TAVUS_PERSONA_ID_MAY || "",
+      isAvailable: true
+    }
   },
   {
     id: "3",
@@ -49,8 +67,14 @@ export const students: Student[] = [
     personality: "Anxious and perfectionist", 
     struggles: ["Scientific method", "Lab procedures", "Confidence"],
     strengths: ["Attention to detail", "Memorization"],
-    thumbnail: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop&crop=face",
-    description: "A careful student who gets overwhelmed by experiments but excels at theoretical concepts."
+    thumbnail: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop&crop=face", // TODO: Replace with Jordan's actual avatar image
+    description: "A careful student who gets overwhelmed by experiments but excels at theoretical concepts.",
+    tavusConfig: {
+      apiKeySuffix: "JOR",
+      replicaId: process.env.TAVUS_REPLICA_ID_JOR || "",
+      personaId: process.env.TAVUS_PERSONA_ID_JOR || "",
+      isAvailable: true
+    }
   },
   {
     id: "4",
@@ -63,7 +87,13 @@ export const students: Student[] = [
     struggles: ["Memorizing dates", "Essay writing", "Source analysis"],
     strengths: ["Critical thinking", "Debates"],
     thumbnail: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400&h=400&fit=crop&crop=face",
-    description: "A challenging student who questions everything but has great analytical potential."
+    description: "A challenging student who questions everything but has great analytical potential.",
+    tavusConfig: {
+      apiKeySuffix: "SAM",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   },
   {
     id: "5",
@@ -76,7 +106,13 @@ export const students: Student[] = [
     struggles: ["Showing work", "Patience with problems", "Organization"],
     strengths: ["Quick mental math", "Pattern recognition"],
     thumbnail: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&h=400&fit=crop&crop=face",
-    description: "A bright student who rushes through problems and makes careless mistakes."
+    description: "A bright student who rushes through problems and makes careless mistakes.",
+    tavusConfig: {
+      apiKeySuffix: "EMM",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   },
   {
     id: "6",
@@ -89,7 +125,13 @@ export const students: Student[] = [
     struggles: ["Mathematical concepts", "Problem solving", "Self-confidence"],
     strengths: ["Conceptual understanding", "Asking questions"],
     thumbnail: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop&crop=face",
-    description: "A senior struggling with physics who needs encouragement and step-by-step guidance."
+    description: "A senior struggling with physics who needs encouragement and step-by-step guidance.",
+    tavusConfig: {
+      apiKeySuffix: "AID",
+      replicaId: process.env.TAVUS_REPLICA_ID_AID || "",
+      personaId: process.env.TAVUS_PERSONA_ID_AID || "",
+      isAvailable: true
+    }
   },
   {
     id: "7",
@@ -102,7 +144,13 @@ export const students: Student[] = [
     struggles: ["Pronunciation", "Grammar rules", "Speaking confidence"],
     strengths: ["Vocabulary", "Written work"],
     thumbnail: "https://images.unsplash.com/photo-1489424731084-a5d8b219a5bb?w=400&h=400&fit=crop&crop=face",
-    description: "A social student who excels in writing French but is shy about speaking."
+    description: "A social student who excels in writing French but is shy about speaking.",
+    tavusConfig: {
+      apiKeySuffix: "ZOE",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   },
   {
     id: "8",
@@ -115,7 +163,13 @@ export const students: Student[] = [
     struggles: ["Chemical equations", "Lab safety", "Concentration"],
     strengths: ["Logical reasoning", "Following procedures"],
     thumbnail: "https://images.unsplash.com/photo-1507081323647-4d250478b919?w=400&h=400&fit=crop&crop=face",
-    description: "A methodical student who gets overwhelmed by the complexity of chemical reactions."
+    description: "A methodical student who gets overwhelmed by the complexity of chemical reactions.",
+    tavusConfig: {
+      apiKeySuffix: "MAR",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   },
   {
     id: "9",
@@ -128,7 +182,13 @@ export const students: Student[] = [
     struggles: ["Perspective drawing", "Color theory", "Art history"],
     strengths: ["Creativity", "Imagination"],
     thumbnail: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop&crop=face",
-    description: "An imaginative artist who needs help with technical drawing skills."
+    description: "An imaginative artist who needs help with technical drawing skills.",
+    tavusConfig: {
+      apiKeySuffix: "LIL",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   },
   {
     id: "10",
@@ -141,6 +201,12 @@ export const students: Student[] = [
     struggles: ["Programming logic", "Debugging", "Syntax errors"],
     strengths: ["Problem-solving mindset", "Persistence"],
     thumbnail: "https://images.unsplash.com/photo-1506277886164-e25aa3f4ef7f?w=400&h=400&fit=crop&crop=face",
-    description: "A determined student who loves technology but struggles with programming concepts."
+    description: "A determined student who loves technology but struggles with programming concepts.",
+    tavusConfig: {
+      apiKeySuffix: "TYL",
+      replicaId: "",
+      personaId: "",
+      isAvailable: false
+    }
   }
 ];

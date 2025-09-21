@@ -2,50 +2,58 @@
 
 ## Environment Variables Required
 
-You need to set up the following environment variables for the Tavus avatar integration to work:
+You need to set up the following environment variables for student-specific Tavus avatars:
 
-### 1. Create a `.env.local` file in your project root:
-
-```bash
-# Tavus API Configuration
-TAVUS_API_KEY=your_tavus_api_key_here
-TAVUS_REPLICA_ID=your_replica_id_here
-PERSONA_ID=your_persona_id_here
+### Base Configuration (Fallback)
+```
+TAVUS_API_KEY=your_base_api_key_here
+TAVUS_REPLICA_ID=your_base_replica_id_here
+PERSONA_ID=your_base_persona_id_here
 ```
 
-### 2. Get your Tavus credentials:
+### Student-Specific Configuration
 
-1. **Sign up for Tavus**: Go to [https://tavusapi.com](https://tavusapi.com) and create an account
-2. **Create a Replica**: Create a digital replica (avatar) of a person
-3. **Create a Persona**: Create a persona (AI personality) for the replica
-4. **Get API Key**: Generate an API key from your dashboard
+#### Maya Rodriguez (MAY)
+```
+TAVUS_API_KEY_MAY=your_api_key_ending_in_MAY
+TAVUS_REPLICA_ID_MAY=your_replica_id_for_maya
+TAVUS_PERSONA_ID_MAY=your_persona_id_for_maya
+```
 
-### 3. Current Error:
+#### Jordan Kim (JOR)
+```
+TAVUS_API_KEY_JOR=your_api_key_ending_in_JOR
+TAVUS_REPLICA_ID_JOR=your_replica_id_for_jordan
+TAVUS_PERSONA_ID_JOR=your_persona_id_for_jordan
+```
 
-The error "Invalid persona_id" means your `PERSONA_ID` environment variable is either:
-- Not set
-- Set to an invalid value
-- The persona doesn't exist in your Tavus account
+#### Aiden Park (AID)
+```
+TAVUS_API_KEY_AID=your_api_key_ending_in_AID
+TAVUS_REPLICA_ID_AID=your_replica_id_for_aiden
+TAVUS_PERSONA_ID_AID=your_persona_id_for_aiden
+```
 
-### 4. Valid Persona ID Format:
+## How It Works
 
-Tavus persona IDs typically look like: `pcfb7aee425d` (starts with 'p' followed by alphanumeric characters)
+1. **Available Students**: Maya, Jordan, and Aiden are configured as available
+2. **Coming Soon**: All other students show "Coming Soon" status
+3. **API Key Matching**: Keys ending in MAY, JOR, and AID are used for respective students
+4. **System Prompts**: Each student gets personalized prompts based on their data from `students.ts`
 
-### 5. Steps to Fix:
+## Student Data Integration
 
-1. Log into your Tavus dashboard
-2. Go to "Personas" section
-3. Copy the correct persona ID
-4. Update your `.env.local` file with the correct `PERSONA_ID`
-5. Restart your development server
+The system automatically uses each student's:
+- Name, age, grade, subject
+- Personality traits
+- Struggles and strengths
+- Average grade (affects knowledge level in prompts)
+- Description
 
-### 6. Test the Setup:
+## Testing
 
-Once you've set up the environment variables correctly, the avatar should load automatically when you visit the talk page.
-
-## Troubleshooting
-
-- **"Missing required environment variables"**: Check that all three variables are set in `.env.local`
-- **"Invalid persona_id"**: Verify the persona exists in your Tavus account
-- **"Invalid replica_id"**: Verify the replica exists in your Tavus account
-- **API Key errors**: Make sure your API key is valid and has the correct permissions
+1. Set up the environment variables
+2. Start the application
+3. Go to `/talk` to see student selection
+4. Click on Maya, Jordan, or Aiden to start a session
+5. Other students will show "Coming Soon" status

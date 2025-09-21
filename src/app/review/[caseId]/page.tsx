@@ -21,7 +21,6 @@ export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('transcript');
-  const [audioError, setAudioError] = useState<string | null>(null);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [currentSkillIndex, setCurrentSkillIndex] = useState<number>(0);
   const [isAnimating, setIsAnimating] = useState<boolean>(false);
@@ -55,7 +54,6 @@ export default function ReviewPage() {
 
         const data = await response.json();
         console.log('Case data received:', data.case);
-        console.log('Audio URL:', data.case.audioUrl ? 'Present' : 'Missing');
         setCaseData(data.case);
       } catch (err) {
         console.error('Error fetching case data:', err);
@@ -78,33 +76,7 @@ export default function ReviewPage() {
     return new Date(date).toLocaleString();
   };
 
-  const validateAudioUrl = (url: string): boolean => {
-    if (!url) return false;
-    
-    // Check if it's a valid data URL
-    if (url.startsWith('data:audio/')) {
-      try {
-        // Basic validation of data URL format
-        const [header, data] = url.split(',');
-        if (!header || !data) return false;
-        
-        // Check if it has a valid audio MIME type
-        const mimeType = header.split(':')[1]?.split(';')[0];
-        const validAudioTypes = ['audio/wav', 'audio/mp4', 'audio/webm', 'audio/ogg'];
-        return validAudioTypes.includes(mimeType);
-      } catch {
-        return false;
-      }
-    }
-    
-    // For non-data URLs, check if it's a valid URL
-    try {
-      new URL(url);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+
 
   const getSkillExplanation = (skill: string, score: number) => {
     const explanations: Record<string, (score: number) => { description: string; reasoning: string }> = {
@@ -341,6 +313,25 @@ export default function ReviewPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
+      {/* Action Buttons - Top Priority */}
+      <div className="bg-blue-600 text-white py-4">
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="flex items-center justify-center space-x-4">
+            <Link 
+              href="/talk"
+              className="bg-white text-blue-600 hover:bg-gray-100 px-6 py-3 rounded-lg transition-colors font-semibold"
+            >
+              Start New Session
+            </Link>
+            <Link 
+              href="/review"
+              className="bg-blue-700 hover:bg-blue-800 text-white px-6 py-3 rounded-lg transition-colors font-semibold"
+            >
+              View All Sessions
+            </Link>
+          </div>
+        </div>
+      </div>
       <style jsx>{`
         @keyframes cardFlip {
           0% { transform: rotateY(0deg); }
@@ -401,7 +392,7 @@ export default function ReviewPage() {
               <div className="text-right">
                 <div className="text-sm text-gray-500 mb-1">Session Duration</div>
                 <div className="text-lg font-semibold text-gray-700">
-                  {caseData && Math.round((new Date(caseData.endedAt).getTime() - new Date(caseData.createdAt).getTime()) / 60000)} min
+                  {caseData && formatTime(caseData.conversationLength)}
                 </div>
               </div>
             </div>
@@ -424,9 +415,7 @@ export default function ReviewPage() {
                 <span className="text-lg">📄</span>
                 <span>Transcript</span>
               </div>
-              {activeTab === 'transcript' && (
-                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-8 h-1 bg-gradient-to-r from-purple-500 to-blue-500 rounded-full"></div>
-              )}
+
             </button>
             <button
               onClick={() => setActiveTab('skill-analysis')}
@@ -440,9 +429,6 @@ export default function ReviewPage() {
                 <span className="text-lg">📊</span>
                 <span>Skill Analysis</span>
               </div>
-              {activeTab === 'skill-analysis' && (
-                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-8 h-1 bg-gradient-to-r from-purple-500 to-blue-500 rounded-full"></div>
-              )}
             </button>
             <button
               onClick={() => setActiveTab('feedback')}
@@ -456,153 +442,11 @@ export default function ReviewPage() {
                 <span className="text-lg">💬</span>
                 <span>Feedback</span>
               </div>
-              {activeTab === 'feedback' && (
-                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-8 h-1 bg-gradient-to-r from-purple-500 to-blue-500 rounded-full"></div>
-              )}
             </button>
           </div>
 
           {/* Tab Content */}
           <div className="p-6">
-            {/* Audio Player */}
-            <div className="mb-8 p-6 bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl border border-blue-200/50 shadow-lg">
-              <div className="flex items-center mb-4">
-                <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center mr-3">
-                  <span className="text-white text-sm">🎵</span>
-                </div>
-                <h4 className="text-lg font-semibold text-gray-800">Session Recording</h4>
-              </div>
-              {caseData?.audioUrl && validateAudioUrl(caseData.audioUrl) ? (
-                <div>
-                  <audio 
-                    controls 
-                    className="w-full"
-                    preload="metadata"
-                    onError={(e) => {
-                      const audioElement = e.currentTarget as HTMLAudioElement;
-                      const error = audioElement.error;
-                      
-                      console.error('Audio playback error:', {
-                        error: error,
-                        code: error?.code,
-                        message: error?.message,
-                        audioUrl: caseData.audioUrl?.substring(0, 100) + '...',
-                        audioSrc: audioElement.src,
-                        networkState: audioElement.networkState,
-                        readyState: audioElement.readyState
-                      });
-                      
-                      // Handle specific error codes and set user-friendly error messages
-                      if (error) {
-                        switch (error.code) {
-                          case MediaError.MEDIA_ERR_ABORTED:
-                            console.log('Audio playback was aborted');
-                            setAudioError('Audio playback was interrupted');
-                            break;
-                          case MediaError.MEDIA_ERR_NETWORK:
-                            console.log('Network error occurred while loading audio');
-                            setAudioError('Network error loading audio');
-                            break;
-                          case MediaError.MEDIA_ERR_DECODE:
-                            console.log('Audio decoding error - format may not be supported');
-                            setAudioError('Audio format not supported by your browser');
-                            break;
-                          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                            console.log('Audio format not supported by browser');
-                            setAudioError('Audio format not supported by your browser');
-                            break;
-                          default:
-                            console.log('Unknown audio error');
-                            setAudioError('Audio playback error occurred');
-                        }
-                      } else {
-                        setAudioError('Audio playback error occurred');
-                      }
-                    }}
-                    onLoadStart={() => {
-                      console.log('Audio loading started');
-                    }}
-                    onCanPlay={() => {
-                      console.log('Audio can play');
-                    }}
-                    onLoadedMetadata={() => {
-                      console.log('Audio metadata loaded');
-                    }}
-                    onLoad={() => {
-                      console.log('Audio loaded');
-                    }}
-                  >
-                    {/* Try different source formats based on the data URL format */}
-                    {caseData.audioUrl?.startsWith('data:audio/wav') && (
-                      <source src={caseData.audioUrl} type="audio/wav" />
-                    )}
-                    {caseData.audioUrl?.startsWith('data:audio/mp4') && (
-                      <source src={caseData.audioUrl} type="audio/mp4" />
-                    )}
-                    {caseData.audioUrl?.startsWith('data:audio/webm') && (
-                      <>
-                        <source src={caseData.audioUrl} type="audio/webm;codecs=opus" />
-                        <source src={caseData.audioUrl} type="audio/webm" />
-                      </>
-                    )}
-                    {caseData.audioUrl?.startsWith('data:audio/ogg') && (
-                      <source src={caseData.audioUrl} type="audio/ogg" />
-                    )}
-                    {/* Fallback: try all formats if we can't determine the type */}
-                    {!caseData.audioUrl?.startsWith('data:audio/') && (
-                      <>
-                        <source src={caseData.audioUrl} type="audio/wav" />
-                        <source src={caseData.audioUrl} type="audio/mp4" />
-                        <source src={caseData.audioUrl} type="audio/webm;codecs=opus" />
-                        <source src={caseData.audioUrl} type="audio/webm" />
-                        <source src={caseData.audioUrl} type="audio/ogg" />
-                      </>
-                    )}
-                    Your browser does not support the audio element.
-                  </audio>
-                  <div className="mt-2 text-xs text-gray-500">
-                    <p>Audio data size: {caseData.audioUrl ? Math.round(caseData.audioUrl.length * 0.75) : 0} bytes (estimated)</p>
-                    <p>Format: {caseData.audioUrl?.startsWith('data:audio/webm') ? 'WebM (Opus)' : 
-                              caseData.audioUrl?.startsWith('data:audio/wav') ? 'WAV' :
-                              caseData.audioUrl?.startsWith('data:audio/mp4') ? 'MP4' :
-                              caseData.audioUrl?.startsWith('data:audio/ogg') ? 'OGG' : 'Unknown'}</p>
-                    <p>Data URL: {caseData.audioUrl?.substring(0, 50)}...</p>
-                  </div>
-                  
-                  {/* Audio Error Display */}
-                  {audioError && (
-                    <div className="mt-3 p-3 bg-red-100 border border-red-300 rounded-lg">
-                      <div className="flex items-center">
-                        <svg className="w-5 h-5 text-red-500 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                        </svg>
-                        <span className="text-sm text-red-700">{audioError}</span>
-                        <button
-                          onClick={() => setAudioError(null)}
-                          className="ml-auto text-red-500 hover:text-red-700"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : caseData?.audioUrl && !validateAudioUrl(caseData.audioUrl) ? (
-                <div className="text-center text-red-500 py-8">
-                  <svg className="w-12 h-12 mx-auto mb-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                  </svg>
-                  <p className="font-medium">Invalid Audio Format</p>
-                  <p className="text-sm mt-1">The audio recording format is not supported or corrupted</p>
-                </div>
-              ) : (
-                <div className="text-center py-4 text-gray-500">
-                  <div className="text-2xl mb-2">🎤</div>
-                  <p>No audio recording available for this session</p>
-                  <p className="text-xs mt-1">Audio recording may not have been enabled or supported</p>
-                </div>
-              )}
-            </div>
 
             {/* Transcript Tab */}
             {activeTab === 'transcript' && (
@@ -765,21 +609,27 @@ export default function ReviewPage() {
                             Specific Recommendations
                           </h4>
                           <ul className="text-blue-700 text-sm space-y-1">
-                            {caseData.feedback.recommendations
-                              .filter(rec => rec.toLowerCase().includes(expandedSkill.toLowerCase()) || 
-                                (expandedSkill === 'rapport' && rec.toLowerCase().includes('connect')) ||
-                                (expandedSkill === 'questioningTechnique' && rec.toLowerCase().includes('question')) ||
-                                (expandedSkill === 'patience' && rec.toLowerCase().includes('wait')) ||
-                                (expandedSkill === 'adaptability' && rec.toLowerCase().includes('adjust')) ||
-                                (expandedSkill === 'subjectKnowledge' && rec.toLowerCase().includes('knowledge'))
-                              )
-                              .slice(0, 3)
-                              .map((rec, index) => (
+                            {(() => {
+                              // Use AI-generated skill-specific recommendations if available
+                              const skillRecs = caseData.feedback.skillRecommendations?.[expandedSkill as keyof typeof caseData.feedback.skillRecommendations];
+                              
+                              if (skillRecs && skillRecs.length > 0) {
+                                return skillRecs.map((rec, index) => (
+                                  <li key={index} className="flex items-start">
+                                    <span className="text-blue-500 mr-2">•</span>
+                                    {rec}
+                                  </li>
+                                ));
+                              }
+                              
+                              // Fallback to general recommendations if no skill-specific ones
+                              return caseData.feedback.recommendations.slice(0, 3).map((rec, index) => (
                                 <li key={index} className="flex items-start">
                                   <span className="text-blue-500 mr-2">•</span>
                                   {rec}
                                 </li>
-                              ))}
+                              ));
+                            })()}
                           </ul>
                         </div>
                       </div>
@@ -1076,21 +926,6 @@ export default function ReviewPage() {
           </div>
         </div>
 
-        {/* Navigation */}
-        <div className="mt-8 flex justify-center space-x-4">
-          <Link 
-            href="/talk"
-            className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
-          >
-            Start New Session
-          </Link>
-          <Link 
-            href="/review"
-            className="px-6 py-3 bg-gray-600 hover:bg-gray-700 text-white rounded-lg transition-colors"
-          >
-            View All Sessions
-          </Link>
-        </div>
       </div>
     </div>
   );

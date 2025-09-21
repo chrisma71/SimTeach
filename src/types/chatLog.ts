@@ -11,6 +11,13 @@ export interface Feedback {
     subjectKnowledge: number; // 1-10
   };
   recommendations: string[];
+  skillRecommendations?: {
+    rapport: string[];
+    questioningTechnique: string[];
+    patience: string[];
+    adaptability: string[];
+    subjectKnowledge: string[];
+  };
   studentEngagement: number; // 1-10
   keyMoments: Array<{
     timestamp: string;
@@ -37,7 +44,6 @@ export interface ChatLog {
   conversationLength: number; // Duration in seconds
   summary?: string; // AI-generated summary of what was accomplished and how the student felt
   feedback?: Feedback; // AI-generated feedback for the tutoring session
-  audioUrl?: string; // URL to recorded audio file
   type?: string; // Type of session (e.g., 'tavus_video_session')
   sessionId?: string; // Custom session identifier
   topicsCovered?: string[]; // Topics discussed in the session
