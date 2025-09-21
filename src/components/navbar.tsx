@@ -22,11 +22,8 @@ export default function Navbar() {
             {/* Logo */}
             <div className="flex items-center">
               <Link href="/" className="flex items-center space-x-2 group">
-                <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform duration-200">
-                  <span className="text-white font-bold text-sm">ST</span>
-                </div>
-                <span className="text-xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-                  SimTeach AI
+                <span className="text-xl bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+                  <span className="font-bold">Sim</span>Teach AI
                 </span>
               </Link>
             </div>
