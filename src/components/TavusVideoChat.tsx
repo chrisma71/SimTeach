@@ -36,22 +36,12 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const [isTavusSpeaking, setIsTavusSpeaking] = useState(false);
   const [fullTranscript, setFullTranscript] = useState<string>('');
   
-  // NEW: Video context capture state
-  const [videoContext, setVideoContext] = useState<string>('');
-  const [isAnalyzingVideo, setIsAnalyzingVideo] = useState(false);
-  const [cameraEnabled, setCameraEnabled] = useState(false);
-  const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
-  const [frameCaptureCount, setFrameCaptureCount] = useState(0);
-  
   // Refs
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  // NEW: Video capture refs
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const frameCaptureIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Timer for call duration
   useEffect(() => {
@@ -404,199 +394,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     }
   };
 
-  // NEW: Video context capture functions
-  const toggleCamera = async () => {
-    console.log('📹 ===== TOGGLING CAMERA =====');
-    console.log('📹 Current camera state:', cameraEnabled);
-    
-    if (cameraEnabled) {
-      // Turn off camera
-      console.log('📹 Turning off camera...');
-      if (videoStream) {
-        videoStream.getTracks().forEach(track => {
-          console.log('📹 Stopping video track:', track.kind);
-          track.stop();
-        });
-        setVideoStream(null);
-      }
-      setCameraEnabled(false);
-      setVideoContext('');
-      setIsAnalyzingVideo(false);
-      
-      // Clear frame capture interval
-      if (frameCaptureIntervalRef.current) {
-        clearInterval(frameCaptureIntervalRef.current);
-        frameCaptureIntervalRef.current = null;
-        console.log('📹 Frame capture interval cleared');
-      }
-      
-      console.log('📹 Camera turned off successfully');
-    } else {
-      // Turn on camera
-      console.log('📹 Turning on camera...');
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { width: 320, height: 240 },
-          audio: false 
-        });
-        console.log('📹 Camera stream obtained:', stream);
-        console.log('📹 Video tracks:', stream.getVideoTracks().length);
-        console.log('📹 Audio tracks:', stream.getAudioTracks().length);
-        
-        setVideoStream(stream);
-        setCameraEnabled(true);
-        setFrameCaptureCount(0);
-        
-        // Set video source
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          console.log('📹 Video source set');
-        }
-        
-        console.log('📹 Camera turned on successfully');
-      } catch (err) {
-        console.error('📹 Camera access failed:', err);
-        setError('Camera not available');
-        setCameraEnabled(false);
-      }
-    }
-  };
-
-  const captureVideoFrame = async (): Promise<string | null> => {
-    console.log('📸 ===== CAPTURING VIDEO FRAME =====');
-    
-    if (!videoRef.current || !cameraEnabled) {
-      console.log('📸 No video element or camera disabled');
-      return null;
-    }
-    
-    try {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      
-      if (!ctx) {
-        console.error('📸 Could not get canvas context');
-        return null;
-      }
-      
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      
-      console.log('📸 Video dimensions:', {
-        width: videoRef.current.videoWidth,
-        height: videoRef.current.videoHeight,
-        canvasWidth: canvas.width,
-        canvasHeight: canvas.height
-      });
-      
-      // Draw video frame to canvas
-      ctx.drawImage(videoRef.current, 0, 0);
-      
-      // Convert to base64
-      const imageData = canvas.toDataURL('image/jpeg', 0.8);
-      console.log('📸 Frame captured successfully');
-      console.log('📸 Image data length:', imageData.length);
-      console.log('📸 Image data preview:', imageData.substring(0, 50) + '...');
-      
-      return imageData;
-    } catch (error) {
-      console.error('📸 Frame capture failed:', error);
-      return null;
-    }
-  };
-
-  const analyzeVideoFrame = async (imageData: string) => {
-    console.log('🔍 ===== ANALYZING VIDEO FRAME =====');
-    console.log('🔍 Image data length:', imageData.length);
-    
-    setIsAnalyzingVideo(true);
-    setFrameCaptureCount(prev => prev + 1);
-    
-    try {
-      console.log('🔍 Calling video context API...');
-      
-      // Call our new video context API
-      const response = await fetch('/api/chat/video-context', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageData: imageData,
-          sessionId: sessionId || 'test-session',
-          studentId: student.id,
-          timestamp: new Date().toISOString()
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('🔍 API Error:', errorData);
-        throw new Error(`API Error: ${errorData.error || 'Failed to analyze video'}`);
-      }
-      
-      const result = await response.json();
-      console.log('🔍 API Response:', result);
-      
-      if (result.success && result.description) {
-        setVideoContext(result.description);
-        console.log('🔍 Video context updated:', result.description);
-        console.log('🔍 Confidence:', result.confidence);
-        console.log('🔍 Objects detected:', result.objects);
-        console.log('🔍 Actions detected:', result.actions);
-      } else {
-        console.error('🔍 Invalid API response:', result);
-        setVideoContext('Analysis failed - invalid response');
-      }
-      
-    } catch (error) {
-      console.error('🔍 Video analysis failed:', error);
-      setVideoContext('Analysis failed - ' + (error instanceof Error ? error.message : 'Unknown error'));
-    } finally {
-      setIsAnalyzingVideo(false);
-      console.log('🔍 Analysis complete');
-    }
-  };
-
-  // Start frame capture when camera is enabled
-  useEffect(() => {
-    if (cameraEnabled && videoStream) {
-      console.log('📹 Starting frame capture interval...');
-      
-      frameCaptureIntervalRef.current = setInterval(async () => {
-        console.log('📹 Frame capture interval triggered');
-        const frame = await captureVideoFrame();
-        if (frame) {
-          await analyzeVideoFrame(frame);
-        }
-      }, 3000); // Capture every 3 seconds
-      
-      console.log('📹 Frame capture interval started');
-    } else {
-      // Clear interval when camera is disabled
-      if (frameCaptureIntervalRef.current) {
-        clearInterval(frameCaptureIntervalRef.current);
-        frameCaptureIntervalRef.current = null;
-        console.log('📹 Frame capture interval cleared');
-      }
-    }
-    
-    return () => {
-      if (frameCaptureIntervalRef.current) {
-        clearInterval(frameCaptureIntervalRef.current);
-        frameCaptureIntervalRef.current = null;
-      }
-    };
-  }, [cameraEnabled, videoStream]);
-
-  // Update video source when stream changes
-  useEffect(() => {
-    if (videoRef.current && videoStream) {
-      console.log('📹 Setting video source');
-      videoRef.current.srcObject = videoStream;
-    }
-  }, [videoStream]);
-
   // Function to split and label transcript using OpenAI with 3 epochs
   const formatTranscriptWithOpenAI = async (fullText: string) => {
     try {
@@ -871,29 +668,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             </div>
           </div>
 
-          {/* NEW: Video Context Display */}
-          {videoContext && (
-            <div className="absolute top-4 right-4 bg-black bg-opacity-70 text-white text-sm px-3 py-2 rounded-lg z-20 max-w-xs">
-              <div className="flex items-center space-x-2 mb-1">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-xs font-medium">Video Context</span>
-              </div>
-              <div className="text-xs opacity-90">{videoContext}</div>
-            </div>
-          )}
-
-          {/* NEW: Hidden video element for frame capture */}
-          {cameraEnabled && (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="hidden"
-              style={{ width: '320px', height: '240px' }}
-            />
-          )}
-
           {/* Bottom Controls - Fixed layout */}
           <div className="absolute bottom-4 left-4 right-4 z-20">
             {/* Top row - Status indicators */}
@@ -948,19 +722,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                   <span className="text-xs text-gray-300">
                     {isTavusSpeaking ? 'Student speaking' : 'Student quiet'}
                   </span>
-                </div>
-
-                {/* NEW: Video context status */}
-                <div className="flex items-center space-x-2">
-                  <div className={`w-2 h-2 rounded-full ${isAnalyzingVideo ? 'bg-yellow-500 animate-pulse' : (videoContext ? 'bg-green-500' : 'bg-gray-500')}`}></div>
-                  <span className="text-xs text-gray-300">
-                    {isAnalyzingVideo ? 'Analyzing video...' : (videoContext ? 'Video context active' : 'No video context')}
-                  </span>
-                </div>
-
-                {/* NEW: Frame capture count */}
-                <div className="text-xs text-gray-300">
-                  Frames: {frameCaptureCount}
                 </div>
 
               </div>
@@ -1106,35 +867,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                   className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-xs"
                 >
                   Test Tavus
-                </button>
-
-                {/* NEW: Camera toggle button */}
-                <button
-                  onClick={toggleCamera}
-                  className={`px-3 py-1 rounded text-xs transition-colors ${
-                    cameraEnabled 
-                      ? 'bg-green-500 hover:bg-green-600 text-white' 
-                      : 'bg-gray-500 hover:bg-gray-600 text-white'
-                  }`}
-                >
-                  {cameraEnabled ? '📹 Camera On' : '📹 Camera Off'}
-                </button>
-
-                {/* NEW: Manual frame capture test */}
-                <button
-                  onClick={async () => {
-                    console.log('🧪 Testing manual frame capture...');
-                    const frame = await captureVideoFrame();
-                    if (frame) {
-                      console.log('🧪 Frame captured, analyzing...');
-                      await analyzeVideoFrame(frame);
-                    } else {
-                      console.log('🧪 No frame captured');
-                    }
-                  }}
-                  className="bg-purple-500 hover:bg-purple-600 text-white px-3 py-1 rounded text-xs"
-                >
-                  📸 Capture Frame
                 </button>
         </div>
         
