@@ -30,9 +30,8 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const [isListening, setIsListening] = useState(false);
   const [isTavusSpeaking, setIsTavusSpeaking] = useState(false);
   const [isUserTurn, setIsUserTurn] = useState(true); // Track whose turn it is
-  const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOff, setIsCameraOff] = useState(false);
-  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+  const [isEndingCall, setIsEndingCall] = useState(false); // Track if call is being ended
+  const [showListeningIndicator, setShowListeningIndicator] = useState(false); // Debounced listening state
   
   // Refs
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -42,6 +41,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const lastTranscriptTimeRef = useRef<number>(0);
   const tavusResponseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastTavusResponseRef = useRef<string>('');
+  const speechRestartTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Timer for call duration
   useEffect(() => {
@@ -63,33 +63,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     };
   }, [isCallActive]);
 
-  // Effect to get user's media stream for mute/camera controls
-  useEffect(() => {
-    if (isCallActive) {
-      navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      }).then(stream => {
-        setMediaStream(stream);
-        console.log('🎥 Media stream obtained for controls');
-      }).catch(error => {
-        console.error('❌ Error accessing media devices:', error);
-      });
-    } else {
-      // Stop all tracks when call ends
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        setMediaStream(null);
-      }
-    }
-
-    return () => {
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        setMediaStream(null);
-      }
-    };
-  }, [isCallActive]);
 
   // Transcript polling effect
   useEffect(() => {
@@ -146,9 +119,12 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         recognition.interimResults = true;
         recognition.lang = 'en-US';
         
+        let isRecognitionActive = false;
+        
         recognition.onstart = () => {
           console.log('🎤 Speech recognition started');
           setIsListening(true);
+          isRecognitionActive = true;
         };
         
         recognition.onresult = (event: any) => {
@@ -180,21 +156,44 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         recognition.onerror = (event: any) => {
           console.error('🎤 Speech recognition error:', event.error);
           setIsListening(false);
+          isRecognitionActive = false;
+          
+          // Only restart for certain errors, not all
+          if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'not-allowed') {
+            console.log('🎤 Speech recognition error, will not restart:', event.error);
+            return;
+          }
+          
+          // Restart after a longer delay for other errors
+          if (isCallActive && !isRecognitionActive) {
+            speechRestartTimeoutRef.current = setTimeout(() => {
+              try {
+                if (isCallActive && !isRecognitionActive) {
+                  recognition.start();
+                }
+              } catch (error) {
+                console.log('🎤 Speech recognition restart failed:', error);
+              }
+            }, 2000); // Increased delay to 2 seconds
+          }
         };
         
         recognition.onend = () => {
           console.log('🎤 Speech recognition ended');
           setIsListening(false);
+          isRecognitionActive = false;
           
-          // Restart recognition after a short delay
-          if (isCallActive) {
-            setTimeout(() => {
+          // Only restart if call is still active and recognition isn't already running
+          if (isCallActive && !isRecognitionActive) {
+            speechRestartTimeoutRef.current = setTimeout(() => {
               try {
-                recognition.start();
+                if (isCallActive && !isRecognitionActive) {
+                  recognition.start();
+                }
               } catch (error) {
                 console.log('🎤 Speech recognition restart failed:', error);
               }
-            }, 100);
+            }, 1000); // Increased delay to 1 second
           }
         };
         
@@ -223,8 +222,34 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         speechRecognitionRef.current.stop();
         speechRecognitionRef.current = null;
       }
+      // Clear any pending restart timeouts
+      if (speechRestartTimeoutRef.current) {
+        clearTimeout(speechRestartTimeoutRef.current);
+        speechRestartTimeoutRef.current = null;
+      }
     };
   }, [isCallActive]);
+
+  // Debounced listening indicator to prevent rapid flashing
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+    
+    if (isListening) {
+      // Show immediately when listening starts
+      setShowListeningIndicator(true);
+    } else {
+      // Hide after a short delay when listening stops
+      timeoutId = setTimeout(() => {
+        setShowListeningIndicator(false);
+      }, 500); // 500ms delay before hiding
+    }
+    
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [isListening]);
 
   // Simple function to manually switch turns
   const switchTurn = () => {
@@ -232,29 +257,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     console.log(`🔄 Manually switched to ${!isUserTurn ? 'User' : 'Tavus'} turn`);
   };
 
-  // Toggle mute functionality
-  const toggleMute = () => {
-    if (mediaStream) {
-      const audioTracks = mediaStream.getAudioTracks();
-      audioTracks.forEach(track => {
-        track.enabled = isMuted; // If currently muted, enable it (unmute)
-      });
-      setIsMuted(!isMuted);
-      console.log(`🎤 ${isMuted ? 'Unmuted' : 'Muted'} microphone`);
-    }
-  };
-
-  // Toggle camera functionality
-  const toggleCamera = () => {
-    if (mediaStream) {
-      const videoTracks = mediaStream.getVideoTracks();
-      videoTracks.forEach(track => {
-        track.enabled = isCameraOff; // If currently off, enable it (turn on)
-      });
-      setIsCameraOff(!isCameraOff);
-      console.log(`📹 Camera ${isCameraOff ? 'enabled' : 'disabled'}`);
-    }
-  };
 
   // Function to switch speaker of a specific message
   const switchMessageSpeaker = (messageId: string) => {
@@ -318,6 +320,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   };
 
   const endCall = async () => {
+    setIsEndingCall(true);
     setIsCallActive(false);
     
     console.log('🛑 Ending call...');
@@ -363,11 +366,6 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         setTranscript([]);
         setIsTranscriptVisible(false);
         
-        // Clean up media stream
-        if (mediaStream) {
-          mediaStream.getTracks().forEach(track => track.stop());
-          setMediaStream(null);
-        }
     
     // Redirect to review page for this specific case
     if (savedCaseId) {
@@ -412,7 +410,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         <iframe
           ref={iframeRef}
           src={conversationData.conversation_url}
-            className={`w-screen h-screen border-0 absolute inset-0 transition-all duration-300 ${isTranscriptVisible ? 'w-[calc(100vw-20rem)]' : ''}`}
+            className={`w-screen h-screen border-0 absolute inset-0 transition-all duration-300`}
           allow="camera; microphone; fullscreen; speaker; display-capture"
             title={`Video call with ${student.name}`}
           style={{ 
@@ -421,7 +419,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
               position: 'fixed',
               top: 0,
               left: 0,
-              zIndex: 1
+              zIndex: 15
             }}
           onLoad={() => {
             console.log('🎬 Iframe loaded - ready for conversation');
@@ -429,16 +427,44 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
           />
           
           {/* Student Info Overlay - Dark overlay like uploaded design */}
-          <div className={`absolute bottom-20 left-4 bg-black bg-opacity-70 text-white text-sm px-4 py-3 rounded-lg z-20 transition-all duration-300 ${isTranscriptVisible ? 'right-80' : 'right-4'}`}>
-            <div className="text-center">
-              <div className="font-bold text-lg">{student.name}</div>
-              <div className="text-sm opacity-75">Student – Practice Teaching</div>
+          <div className={`absolute bottom-20 left-4 bg-black bg-opacity-70 text-white text-sm px-4 py-3 rounded-lg z-30 transition-all duration-300 ${isTranscriptVisible ? 'right-80' : 'right-4'}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-center">
+                <div className="font-bold text-lg">{student.name}</div>
+                <div className="text-sm opacity-75">Student – Practice Teaching</div>
+              </div>
+              
+              {/* Status indicators moved to name bar */}
+              <div className="flex items-center space-x-4">
+                {/* Loading indicator */}
+                {isConnecting && (
+                  <div className="flex items-center space-x-2 bg-black bg-opacity-50 px-3 py-1 rounded-lg">
+                    <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-xs text-white font-medium">Connecting...</span>
+                  </div>
+                )}
+                
+                {/* Speech recognition indicator */}
+                {showListeningIndicator && (
+                  <div className="flex items-center space-x-2 bg-black bg-opacity-50 px-3 py-1 rounded-lg">
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                    <span className="text-xs text-white font-medium">Listening...</span>
+                  </div>
+                )}
+                
+                {/* Call Duration */}
+                <div className="bg-black bg-opacity-50 px-3 py-1 rounded-lg">
+                  <div className="text-sm font-bold text-white">
+                    {formatDuration(callDuration)}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Transcript Panel - Push content to the side */}
+          {/* Transcript Panel - Side panel */}
           {isTranscriptVisible && (
-            <div className="fixed top-0 right-0 w-80 h-full bg-black bg-opacity-95 text-white z-30 overflow-hidden shadow-2xl">
+            <div className="absolute top-0 right-0 w-80 h-full bg-black bg-opacity-95 text-white z-30 overflow-hidden shadow-2xl">
               <div className="p-4 border-b border-gray-600 flex items-center justify-between">
                 <h3 className="text-lg font-semibold">Live Transcript</h3>
                 <button
@@ -448,7 +474,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                   ✕
                 </button>
               </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 h-[calc(100vh-80px)]">
                 {transcript.length === 0 ? (
                   <div className="text-center text-gray-400 py-8">
                     <div className="animate-pulse">Waiting for conversation...</div>
@@ -503,107 +529,68 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             </div>
           )}
 
-          {/* Bottom Controls - Fixed layout with better spacing */}
-          <div className={`absolute bottom-4 left-4 z-20 transition-all duration-300 ${isTranscriptVisible ? 'right-80' : 'right-4'}`}>
-            {/* Top row - Status indicators */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-6">
-                {/* Loading indicator */}
-                {isConnecting && (
-                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
-                    <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-sm text-white font-medium">Connecting...</span>
-                  </div>
-                )}
-                
-                {/* Speech recognition indicator */}
-                {isListening && (
-                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
-                    <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></div>
-                    <span className="text-sm text-white font-medium">Listening...</span>
-                  </div>
-                )}
-                
-                  {/* Mute status indicator */}
-                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
-                    <div className={`w-4 h-4 rounded-full ${isMuted ? 'bg-red-500' : 'bg-green-500'}`}></div>
-                    <span className="text-sm text-white font-medium">
-                      {isMuted ? 'Muted' : 'Unmuted'}
-                    </span>
-                  </div>
-                  
-                  {/* Camera status indicator */}
-                  <div className="flex items-center space-x-3 bg-black bg-opacity-50 px-4 py-2 rounded-lg">
-                    <div className={`w-4 h-4 rounded-full ${isCameraOff ? 'bg-red-500' : 'bg-green-500'}`}></div>
-                    <span className="text-sm text-white font-medium">
-                      {isCameraOff ? 'Camera Off' : 'Camera On'}
-                    </span>
-                  </div>
-              </div>
+        {/* Loading overlay when ending call */}
+        {isEndingCall && (
+          <div className="absolute inset-0 bg-black bg-opacity-50 z-40 flex items-center justify-center">
+            <div className="bg-white rounded-xl p-8 text-center shadow-2xl">
+              <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+              <h3 className="text-xl font-bold text-gray-800 mb-2">Ending Call</h3>
+              <p className="text-gray-600">Saving transcript and redirecting...</p>
+            </div>
+          </div>
+        )}
 
-              {/* Call Duration */}
-              <div className="bg-black bg-opacity-50 px-4 py-2 rounded-lg">
-                <div className="text-lg font-bold text-white">
-                  {formatDuration(callDuration)}
-                </div>
-              </div>
+        {/* Bottom Controls - Three-column layout */}
+        <div className={`absolute bottom-0 left-0 right-0 z-30 ${isTranscriptVisible ? 'right-80' : ''}`}>
+          <div className="flex items-center justify-between p-4 pb-0 pr-2">
+            {/* Left side - Empty for spacing */}
+            <div className="w-1/3"></div>
+            
+            {/* Center - Transcript Button */}
+            <div className="flex justify-center w-1/3">
+              <button
+                onClick={() => setIsTranscriptVisible(!isTranscriptVisible)}
+                className={`px-12 py-4 rounded-xl font-bold text-lg transition-all duration-200 flex items-center space-x-4 shadow-xl ${
+                  isTranscriptVisible 
+                    ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                    : 'bg-white bg-opacity-95 hover:bg-opacity-100 text-gray-800'
+                }`}
+                style={{ minWidth: '250px' }}
+              >
+                <span className="text-xl">📝</span>
+                <span>Live Transcript</span>
+                {transcript.length > 0 && (
+                  <span className="mb-0 bg-red-500 text-white text-sm px-3 rounded-full font-bold">
+                    {transcript.length}
+                  </span>
+                )}
+              </button>
             </div>
 
-            {/* Bottom row - Controls */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                {/* Transcript Toggle Button */}
-                <button
-                  onClick={() => setIsTranscriptVisible(!isTranscriptVisible)}
-                  className={`px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-200 flex items-center space-x-3 shadow-lg ${
-                    isTranscriptVisible 
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                      : 'bg-white bg-opacity-90 hover:bg-opacity-100 text-gray-800'
-                  }`}
-                >
-                  <span className="text-lg">📝</span>
-                  <span>Transcript</span>
-                  {transcript.length > 0 && (
-                    <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full font-bold">
-                      {transcript.length}
-                    </span>
-                  )}
-                </button>
-                
-            {/* Mute/Unmute Button */}
-            <button
-              onClick={toggleMute}
-              className={`px-5 py-3 rounded-xl font-semibold text-sm transition-all duration-200 shadow-lg ${
-                isMuted 
-                  ? 'bg-red-600 hover:bg-red-700 text-white' 
-                  : 'bg-green-600 hover:bg-green-700 text-white'
-              }`}
-            >
-              {isMuted ? '🎤 Unmute' : '🔇 Mute'}
-            </button>
-            
-            {/* Camera Toggle Button */}
-            <button
-              onClick={toggleCamera}
-              className={`px-5 py-3 rounded-xl font-semibold text-sm transition-all duration-200 shadow-lg ${
-                isCameraOff 
-                  ? 'bg-red-600 hover:bg-red-700 text-white' 
-                  : 'bg-green-600 hover:bg-green-700 text-white'
-              }`}
-            >
-              {isCameraOff ? '📹 Camera On' : '📷 Camera Off'}
-            </button>
-              </div>
-        
-              {/* End Call Button - More prominent */}
+            {/* Right side - End Call Button */}
+            <div className="flex justify-end w-1/3">
               <button
                 onClick={endCall}
-                className="bg-red-500 hover:bg-red-600 text-white px-8 py-4 rounded-xl font-bold text-lg transition-all duration-200 shadow-xl hover:shadow-2xl transform hover:scale-105"
+                disabled={isEndingCall}
+                className={`px-16 py-4 rounded-xl font-bold text-xl transition-all duration-200 shadow-xl relative z-30 ${
+                  isEndingCall 
+                    ? 'bg-gray-500 cursor-not-allowed opacity-75' 
+                    : 'bg-red-500 hover:bg-red-600 hover:shadow-2xl transform hover:scale-105'
+                }`}
+                style={{ minWidth: '300px' }}
               >
-                End Call
+                {isEndingCall ? (
+                  <div className="flex items-center justify-center space-x-3">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Ending Call...</span>
+                  </div>
+                ) : (
+                  'End Call'
+                )}
               </button>
             </div>
           </div>
+        </div>
         </div>
       </div>
     );
