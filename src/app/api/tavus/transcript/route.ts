@@ -65,9 +65,13 @@ export async function GET(request: NextRequest) {
     
     // Try to fetch transcript from Tavus API
     try {
-      const apiKey = process.env.TAVUS_API_KEY;
+      // Try to find any available Tavus API key
+      const apiKey = process.env.TAVUS_API_KEY_MAY || 
+                    process.env.TAVUS_API_KEY_JOR || 
+                    process.env.TAVUS_API_KEY_AID;
+      
       if (!apiKey) {
-        throw new Error('TAVUS_API_KEY not found');
+        throw new Error('No Tavus API key found');
       }
 
       // Fetch conversation details from Tavus API

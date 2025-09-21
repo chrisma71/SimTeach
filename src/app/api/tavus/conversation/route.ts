@@ -105,40 +105,17 @@ export async function POST(request: NextRequest) {
   try {
     console.log('Tavus API route called');
     
+    // Test if any environment variables are loaded
+    console.log('🔍 Environment Test:');
+    console.log('NODE_ENV:', process.env.NODE_ENV);
+    console.log('OPENAI_API_KEY exists:', !!process.env.OPENAI_API_KEY);
+    console.log('MONGODB_URI exists:', !!process.env.MONGODB_URI);
+    console.log('AUTH0_SECRET exists:', !!process.env.AUTH0_SECRET);
+    
     const body = await request.json();
     console.log('Request body:', body);
 
     const { action, studentId } = body;
-
-    // Environment variables check
-    const apiKey = process.env.TAVUS_API_KEY;
-    const replicaId = process.env.TAVUS_REPLICA_ID;
-    const personaId = process.env.PERSONA_ID;
-
-    console.log('Environment check:', {
-      hasApiKey: !!apiKey,
-      hasReplicaId: !!replicaId,
-      hasPersonaId: !!personaId,
-      apiKeyLength: apiKey?.length || 0,
-      replicaIdLength: replicaId?.length || 0,
-      personaIdLength: personaId?.length || 0
-    });
-
-    if (!apiKey || !replicaId || !personaId) {
-      return NextResponse.json(
-        { 
-          error: 'Missing required environment variables',
-          details: {
-            missing: {
-              apiKey: !apiKey,
-              replicaId: !replicaId,
-              personaId: !personaId
-            }
-          }
-        },
-        { status: 500 }
-      );
-    }
 
     if (action === 'create') {
       const student = students.find(s => s.id === studentId);
@@ -170,6 +147,33 @@ export async function POST(request: NextRequest) {
       const studentReplicaId = student.tavusConfig.replicaId;
       const studentPersonaId = student.tavusConfig.personaId;
 
+      // Debug environment variables
+      console.log('🔍 Environment Variable Debug:');
+      console.log('Student ID:', student.id);
+      console.log('Student Name:', student.name);
+      console.log('API Key Suffix:', student.tavusConfig.apiKeySuffix);
+      console.log('Looking for env var:', `TAVUS_API_KEY_${student.tavusConfig.apiKeySuffix}`);
+      console.log('Found API Key:', studentApiKey ? 'YES' : 'NO');
+      console.log('API Key length:', studentApiKey?.length || 0);
+      console.log('Replica ID:', studentReplicaId);
+      console.log('Persona ID:', studentPersonaId);
+      
+      // Check all available TAVUS env vars
+      const allTavusVars = Object.keys(process.env).filter(key => key.startsWith('TAVUS_'));
+      console.log('All TAVUS env vars:', allTavusVars);
+      
+      // Check all available PERSONA env vars
+      const allPersonaVars = Object.keys(process.env).filter(key => key.startsWith('PERSONA_'));
+      console.log('All PERSONA env vars:', allPersonaVars);
+      
+      // Check specific env vars for Aiden
+      console.log('TAVUS_API_KEY_AID:', process.env.TAVUS_API_KEY_AID);
+      console.log('TAVUS_REPLICA_ID_AID:', process.env.TAVUS_REPLICA_ID_AID);
+      console.log('PERSONA_ID_AID:', process.env.PERSONA_ID_AID);
+      
+      // Check what the student config actually contains
+      console.log('Student tavusConfig:', JSON.stringify(student.tavusConfig, null, 2));
+
       if (!studentApiKey || !studentReplicaId || !studentPersonaId) {
         return NextResponse.json(
           { 
@@ -183,6 +187,12 @@ export async function POST(request: NextRequest) {
 
       // System prompt to disable Tavus response generation - only speak what we tell you
       const conversationalContext = generateSystemPrompt(student);
+      
+      // Log the system prompt for debugging
+      console.log('🎭 System Prompt for', student.name, ':');
+      console.log('='.repeat(80));
+      console.log(conversationalContext);
+      console.log('='.repeat(80));
 
       // Get the base URL for webhook callback
       const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';

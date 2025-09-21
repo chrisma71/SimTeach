@@ -270,9 +270,10 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     console.log('📝 Transcript entries:', transcript.length);
     
     // Save transcript to chat log if we have entries
+    let savedCaseId = null;
     if (transcript.length > 0 && user) {
       try {
-        await fetch('/api/chat/log', {
+        const response = await fetch('/api/chat/log', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -289,7 +290,12 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             duration: callDuration
           }),
         });
-        console.log('✅ Transcript saved to chat log');
+        
+        if (response.ok) {
+          const result = await response.json();
+          savedCaseId = result.sessionId;
+          console.log('✅ Transcript saved to chat log with ID:', savedCaseId);
+        }
       } catch (error) {
         console.error('❌ Error saving transcript:', error);
       }
@@ -302,7 +308,19 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     setTranscript([]);
     setIsTranscriptVisible(false);
     
-    onEnd?.();
+    // Redirect to review page for this specific case
+    if (savedCaseId) {
+      console.log('🔄 Redirecting to review page:', `/review/${savedCaseId}`);
+      router.push(`/review/${savedCaseId}`);
+    } else {
+      console.log('🔄 Redirecting to general review page');
+      router.push('/review');
+    }
+    
+    // Call onEnd after redirect
+    setTimeout(() => {
+      onEnd?.();
+    }, 100);
   };
 
   // Format call duration

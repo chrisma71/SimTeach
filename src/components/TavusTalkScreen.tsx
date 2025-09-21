@@ -12,21 +12,21 @@ interface TavusTalkScreenProps {
 
 export default function TavusTalkScreen({ onEndCall }: TavusTalkScreenProps) {
   const { user, isLoading: authLoading } = useAuth0();
-  const { activeProfile } = useProfiles();
+  const { activeProfile, setActiveProfile } = useProfiles();
   
   // State management
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
-  // Auto-load first student
+  // Auto-load the active profile from home page selection
   useEffect(() => {
-    if (!selectedStudent && students.length > 0) {
-      const defaultStudent = students[0];
-      setSelectedStudent(defaultStudent);
+    if (activeProfile && !selectedStudent) {
+      setSelectedStudent(activeProfile);
     }
-  }, [selectedStudent]);
+  }, [activeProfile, selectedStudent]);
 
   const handleEndCall = () => {
     setSelectedStudent(null);
+    // Don't clear activeProfile - that's for student selection, not user profile
     onEndCall?.();
   };
 

@@ -48,12 +48,12 @@ export const students: Student[] = [
     personality: "Enthusiastic but easily distracted",
     struggles: ["Reading comprehension", "Essay structure", "Grammar"],
     strengths: ["Creative thinking", "Verbal communication"],
-    thumbnail: "https://images.unsplash.com/photo-1494790108755-2616c9c1b983?w=400&h=400&fit=crop&crop=face",
+    thumbnail: "/videoframe_2731.png",
     description: "An energetic student who loves stories but needs help organizing her thoughts in writing.",
     tavusConfig: {
       apiKeySuffix: "MAY",
       replicaId: process.env.TAVUS_REPLICA_ID_MAY || "",
-      personaId: process.env.TAVUS_PERSONA_ID_MAY || "",
+      personaId: process.env.PERSONA_ID_MAY || "",
       isAvailable: true
     }
   },
@@ -67,12 +67,12 @@ export const students: Student[] = [
     personality: "Anxious and perfectionist", 
     struggles: ["Scientific method", "Lab procedures", "Confidence"],
     strengths: ["Attention to detail", "Memorization"],
-    thumbnail: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop&crop=face", // TODO: Replace with Jordan's actual avatar image
+    thumbnail: "/videoframe_0.png",
     description: "A careful student who gets overwhelmed by experiments but excels at theoretical concepts.",
     tavusConfig: {
       apiKeySuffix: "JOR",
       replicaId: process.env.TAVUS_REPLICA_ID_JOR || "",
-      personaId: process.env.TAVUS_PERSONA_ID_JOR || "",
+      personaId: process.env.PERSONA_ID_JOR || "",
       isAvailable: true
     }
   },
@@ -124,12 +124,12 @@ export const students: Student[] = [
     personality: "Frustrated and giving up easily",
     struggles: ["Mathematical concepts", "Problem solving", "Self-confidence"],
     strengths: ["Conceptual understanding", "Asking questions"],
-    thumbnail: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop&crop=face",
+    thumbnail: "/videoframe_3211.png",
     description: "A senior struggling with physics who needs encouragement and step-by-step guidance.",
     tavusConfig: {
       apiKeySuffix: "AID",
       replicaId: process.env.TAVUS_REPLICA_ID_AID || "",
-      personaId: process.env.TAVUS_PERSONA_ID_AID || "",
+      personaId: process.env.PERSONA_ID_AID || "",
       isAvailable: true
     }
   },

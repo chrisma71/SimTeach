@@ -54,8 +54,7 @@ export default function TalkPage() {
     <TavusTalkScreen 
       onEndCall={() => {
         // The TavusVideoChat component handles the redirect to review page
-        // This is just a fallback
-        router.push('/review');
+        // No need to redirect here as TavusVideoChat handles it
       }}
     />
   );
