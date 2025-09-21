@@ -20,6 +20,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const [callDuration, setCallDuration] = useState(0);
   const [isCallActive, setIsCallActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isUserJoined, setIsUserJoined] = useState(false); // Track if user has actually joined the call
   const [transcript, setTranscript] = useState<Array<{
     id: string;
     text: string;
@@ -32,6 +33,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const [isUserTurn, setIsUserTurn] = useState(true); // Track whose turn it is
   const [isEndingCall, setIsEndingCall] = useState(false); // Track if call is being ended
   const [showListeningIndicator, setShowListeningIndicator] = useState(false); // Debounced listening state
+  const [manualOverrides, setManualOverrides] = useState<Set<string>>(new Set()); // Track manually overridden messages
   
   // Refs
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -42,10 +44,12 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
   const tavusResponseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastTavusResponseRef = useRef<string>('');
   const speechRestartTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isRestartingRef = useRef<boolean>(false); // Track if we're currently restarting
+  const restartAttemptsRef = useRef<number>(0); // Track restart attempts to prevent infinite loops
 
-  // Timer for call duration
+  // Timer for call duration - only start when user has joined
   useEffect(() => {
-    if (isCallActive) {
+    if (isCallActive && isUserJoined) {
       timerRef.current = setInterval(() => {
         setCallDuration(prev => prev + 1);
       }, 1000);
@@ -61,7 +65,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         clearInterval(timerRef.current);
       }
     };
-  }, [isCallActive]);
+  }, [isCallActive, isUserJoined]);
 
 
   // Transcript polling effect
@@ -107,17 +111,44 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     };
   }, [isCallActive, conversationData?.conversation_id]);
 
-  // Speech recognition effect
+  // Speech recognition effect - only start when user has actually joined the call
   useEffect(() => {
-    if (isCallActive && typeof window !== 'undefined') {
+    if (isCallActive && isUserJoined && typeof window !== 'undefined') {
       // Initialize speech recognition
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       
       if (SpeechRecognition) {
+        // Clear any existing recognition first
+        if (speechRecognitionRef.current) {
+          try {
+            speechRecognitionRef.current.stop();
+          } catch (error) {
+            console.log('🎤 Error stopping existing recognition:', error);
+          }
+          speechRecognitionRef.current = null;
+        }
+        
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
+        
+        // Make speech recognition more aggressive
+        recognition.maxAlternatives = 1;
+        recognition.serviceURI = '';
+        
+        // Try to make it more sensitive to pick up everything
+        if ('webkitSpeechRecognition' in window) {
+          // Webkit-specific settings for more aggressive recognition
+          try {
+            if ('SpeechGrammarList' in window) {
+              (recognition as any).grammars = new (window as any).SpeechGrammarList();
+            }
+            (recognition as any).maxAlternatives = 3;
+          } catch (error) {
+            console.log('🎤 SpeechGrammarList not available, using basic settings');
+          }
+        }
         
         let isRecognitionActive = false;
         
@@ -125,13 +156,25 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
           console.log('🎤 Speech recognition started');
           setIsListening(true);
           isRecognitionActive = true;
+          // Reset restart attempts counter on successful start
+          restartAttemptsRef.current = 0;
         };
         
         recognition.onresult = (event: any) => {
           const current = event.resultIndex;
           const transcript = event.results[current][0].transcript;
+          const confidence = event.results[current][0].confidence;
           const isFinal = event.results[current].isFinal;
           
+          // Log all results for debugging
+          console.log(`🎤 Speech detected - Final: ${isFinal}, Confidence: ${confidence}, Text: "${transcript}"`);
+          
+          // Only log final results to reduce noise
+          if (isFinal) {
+            console.log(`🎤 Final speech detected - Confidence: ${confidence}, Text: "${transcript}"`);
+          }
+          
+          // Only capture final results to avoid duplicate interim messages
           if (isFinal && transcript.trim()) {
             // Determine speaker based on current transcript length (index-based)
             setTranscript(prev => {
@@ -153,28 +196,40 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
           }
         };
         
-        recognition.onerror = (event: any) => {
-          console.error('🎤 Speech recognition error:', event.error);
-          setIsListening(false);
-          isRecognitionActive = false;
-          
-          // Only restart for certain errors, not all
-          if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'not-allowed') {
-            console.log('🎤 Speech recognition error, will not restart:', event.error);
-            return;
-          }
-          
-          // Restart after a longer delay for other errors
-          if (isCallActive && !isRecognitionActive) {
-            speechRestartTimeoutRef.current = setTimeout(() => {
+        // Helper function to handle restart logic
+        const attemptRestart = (reason: string) => {
+          if (isCallActive && isUserJoined && !isRestartingRef.current && restartAttemptsRef.current < 5) {
+            console.log(`🔄 ${reason} - restarting speech recognition... (attempt ${restartAttemptsRef.current + 1}/5)`);
+            isRestartingRef.current = true;
+            restartAttemptsRef.current += 1;
+            setTimeout(() => {
               try {
-                if (isCallActive && !isRecognitionActive) {
+                if (isCallActive && isUserJoined && !isRecognitionActive && !isRestartingRef.current) {
                   recognition.start();
                 }
               } catch (error) {
                 console.log('🎤 Speech recognition restart failed:', error);
+              } finally {
+                isRestartingRef.current = false;
               }
-            }, 2000); // Increased delay to 2 seconds
+            }, 1500);
+          } else if (restartAttemptsRef.current >= 5) {
+            console.log('🎤 Max restart attempts reached, stopping speech recognition');
+          } else {
+            console.log('🎤 Not restarting - already restarting or call ended');
+          }
+        };
+
+        recognition.onerror = (event: any) => {
+          console.log('🎤 Speech recognition error:', event.error);
+          setIsListening(false);
+          isRecognitionActive = false;
+          
+          // Only restart for certain recoverable errors
+          if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'aborted') {
+            attemptRestart(`Recoverable error (${event.error})`);
+          } else {
+            console.log('🎤 Non-recoverable error, stopping speech recognition');
           }
         };
         
@@ -183,17 +238,9 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
           setIsListening(false);
           isRecognitionActive = false;
           
-          // Only restart if call is still active and recognition isn't already running
-          if (isCallActive && !isRecognitionActive) {
-            speechRestartTimeoutRef.current = setTimeout(() => {
-              try {
-                if (isCallActive && !isRecognitionActive) {
-                  recognition.start();
-                }
-              } catch (error) {
-                console.log('🎤 Speech recognition restart failed:', error);
-              }
-            }, 1000); // Increased delay to 1 second
+          // Only restart if we're not already restarting (to avoid double restarts)
+          if (!isRestartingRef.current) {
+            attemptRestart('Normal end');
           }
         };
         
@@ -211,7 +258,11 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     } else {
       // Stop speech recognition when call ends
       if (speechRecognitionRef.current) {
-        speechRecognitionRef.current.stop();
+        try {
+          speechRecognitionRef.current.stop();
+        } catch (error) {
+          console.log('🎤 Error stopping speech recognition:', error);
+        }
         speechRecognitionRef.current = null;
       }
       setIsListening(false);
@@ -219,7 +270,11 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     
     return () => {
       if (speechRecognitionRef.current) {
-        speechRecognitionRef.current.stop();
+        try {
+          speechRecognitionRef.current.stop();
+        } catch (error) {
+          console.log('🎤 Error stopping speech recognition in cleanup:', error);
+        }
         speechRecognitionRef.current = null;
       }
       // Clear any pending restart timeouts
@@ -227,8 +282,11 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         clearTimeout(speechRestartTimeoutRef.current);
         speechRestartTimeoutRef.current = null;
       }
+      // Reset restart flag and attempts counter
+      isRestartingRef.current = false;
+      restartAttemptsRef.current = 0;
     };
-  }, [isCallActive]);
+  }, [isCallActive, isUserJoined]);
 
   // Debounced listening indicator to prevent rapid flashing
   useEffect(() => {
@@ -251,6 +309,17 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
     };
   }, [isListening]);
 
+
+
+  // Simple function to start transcription after a delay
+  const startTranscriptionAfterDelay = () => {
+    console.log('🎬 Iframe loaded - will start transcription in 4 seconds');
+    setTimeout(() => {
+      console.log('🎤 Starting transcription after delay');
+      setIsUserJoined(true);
+    }, 4000); // Wait 4 seconds
+  };
+
   // Simple function to manually switch turns
   const switchTurn = () => {
     setIsUserTurn(!isUserTurn);
@@ -267,7 +336,27 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
           : entry
       )
     );
+    
+    // Track this as a manual override
+    setManualOverrides(prev => new Set([...prev, messageId]));
+    
     console.log(`🔄 Switched speaker for message ${messageId}`);
+  };
+
+  // Function to calculate next speaker based on manual overrides
+  const getNextSpeaker = () => {
+    if (transcript.length === 0) return 'You';
+    
+    // Count how many messages have been manually switched
+    const overrideCount = manualOverrides.size;
+    
+    // Calculate the expected next speaker
+    // If we have an even number of overrides, the pattern continues normally
+    // If we have an odd number of overrides, the pattern is flipped
+    const baseIndex = transcript.length;
+    const isUser = (baseIndex + overrideCount) % 2 === 0;
+    
+    return isUser ? 'You' : student.name;
   };
 
   const startConversation = async () => {
@@ -365,6 +454,7 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
         setSessionId(null);
         setTranscript([]);
         setIsTranscriptVisible(false);
+        setIsUserJoined(false);
         
     
     // Redirect to review page for this specific case
@@ -423,6 +513,8 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             }}
           onLoad={() => {
             console.log('🎬 Iframe loaded - ready for conversation');
+            // Start transcription after a simple delay
+            startTranscriptionAfterDelay();
           }}
           />
           
@@ -477,9 +569,11 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
               <div className="flex-1 overflow-y-auto p-4 space-y-3 h-[calc(100vh-80px)]">
                 {transcript.length === 0 ? (
                   <div className="text-center text-gray-400 py-8">
-                    <div className="animate-pulse">Waiting for conversation...</div>
+                    <div className="animate-pulse">
+                      {!isUserJoined ? 'Starting transcription in 4 seconds...' : 'Waiting for conversation...'}
+                    </div>
                     <div className="text-xs mt-2 opacity-75">
-                      Your speech will be transcribed automatically
+                      {!isUserJoined ? 'Speech recognition will start automatically' : 'Your speech will be transcribed automatically'}
                     </div>
                   </div>
                 ) : (
@@ -496,6 +590,11 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                         <div className="text-sm font-bold flex items-center space-x-2">
                           <span className={`w-2 h-2 rounded-full ${entry.isUser ? 'bg-blue-300' : 'bg-gray-400'}`}></span>
                           <span>{entry.isUser ? 'You' : student.name}</span>
+                          {manualOverrides.has(entry.id) && (
+                            <span className="text-xs bg-yellow-500 text-yellow-900 px-2 py-1 rounded-full font-medium">
+                              ✏️ Switched
+                            </span>
+                          )}
                         </div>
                         <button
                           onClick={() => switchMessageSpeaker(entry.id)}
@@ -517,11 +616,22 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
                 {transcript.length > 0 && (
                   <div className="text-center text-gray-500 text-xs mt-4 p-2 bg-gray-800 rounded">
                     <div className="flex items-center justify-center space-x-2">
-                      <div className={`w-2 h-2 rounded-full ${transcript.length % 2 === 0 ? 'bg-green-500' : 'bg-blue-500'}`}></div>
-                      <span>Next turn: {transcript.length % 2 === 0 ? 'You' : 'Tavus'}</span>
+                      {(() => {
+                        const nextSpeaker = getNextSpeaker();
+                        const isUser = nextSpeaker === 'You';
+                        return (
+                          <>
+                            <div className={`w-2 h-2 rounded-full ${isUser ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                            <span>Next turn: {nextSpeaker}</span>
+                          </>
+                        );
+                      })()}
                     </div>
                     <div className="text-xs mt-1 opacity-75">
-                      Auto-alternating based on message count
+                      {manualOverrides.size > 0 
+                        ? `Adjusted for ${manualOverrides.size} manual switch${manualOverrides.size !== 1 ? 'es' : ''}`
+                        : 'Auto-alternating based on message count'
+                      }
                     </div>
                   </div>
                 )}
@@ -548,23 +658,32 @@ export default function TavusVideoChat({ student, onEnd }: TavusVideoChatProps) 
             
             {/* Center - Transcript Button */}
             <div className="flex justify-center w-1/3">
-              <button
-                onClick={() => setIsTranscriptVisible(!isTranscriptVisible)}
-                className={`px-12 py-4 rounded-xl font-bold text-lg transition-all duration-200 flex items-center space-x-4 shadow-xl ${
-                  isTranscriptVisible 
-                    ? 'bg-blue-600 hover:bg-blue-700 text-white' 
-                    : 'bg-white bg-opacity-95 hover:bg-opacity-100 text-gray-800'
-                }`}
-                style={{ minWidth: '250px' }}
-              >
-                <span className="text-xl">📝</span>
-                <span>Live Transcript</span>
-                {transcript.length > 0 && (
-                  <span className="mb-0 bg-red-500 text-white text-sm px-3 rounded-full font-bold">
-                    {transcript.length}
-                  </span>
-                )}
-              </button>
+              {!isUserJoined ? (
+                <div className="px-12 py-4 rounded-xl font-bold text-lg transition-all duration-200 flex items-center space-x-4 shadow-xl bg-gray-500 text-white"
+                  style={{ minWidth: '250px' }}
+                >
+                  <span className="text-xl">⏳</span>
+                  <span>Starting in 4 seconds...</span>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsTranscriptVisible(!isTranscriptVisible)}
+                  className={`px-12 py-4 rounded-xl font-bold text-lg transition-all duration-200 flex items-center space-x-4 shadow-xl ${
+                    isTranscriptVisible 
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                      : 'bg-white bg-opacity-95 hover:bg-opacity-100 text-gray-800'
+                  }`}
+                  style={{ minWidth: '250px' }}
+                >
+                  <span className="text-xl">📝</span>
+                  <span>Live Transcript</span>
+                  {transcript.length > 0 && (
+                    <span className="mb-0 bg-red-500 text-white text-sm px-3 rounded-full font-bold">
+                      {transcript.length}
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
 
             {/* Right side - End Call Button */}

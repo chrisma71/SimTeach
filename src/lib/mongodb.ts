@@ -5,7 +5,15 @@ if (!process.env.MONGODB_URI) {
 }
 
 const uri = process.env.MONGODB_URI;
-const options = {};
+const options = {
+  maxPoolSize: 10, // Maintain up to 10 socket connections
+  serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
+  socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+  retryWrites: true,
+  retryReads: true,
+  connectTimeoutMS: 10000, // Give up initial connection after 10 seconds
+  heartbeatFrequencyMS: 10000, // Send a ping every 10 seconds
+};
 
 let client: MongoClient;
 let clientPromise: Promise<MongoClient>;
@@ -33,6 +41,24 @@ if (process.env.NODE_ENV === 'development') {
 export default clientPromise;
 
 export async function getDatabase(): Promise<Db> {
-  const client = await clientPromise;
-  return client.db('PennApps');
+  try {
+    const client = await clientPromise;
+    return client.db('PennApps');
+  } catch (error) {
+    console.error('MongoDB connection error:', error);
+    throw new Error('Failed to connect to MongoDB. Please check your connection and try again.');
+  }
+}
+
+// Helper function to test MongoDB connection
+export async function testConnection(): Promise<boolean> {
+  try {
+    const client = await clientPromise;
+    await client.db('admin').command({ ping: 1 });
+    console.log('✅ MongoDB connection successful');
+    return true;
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error);
+    return false;
+  }
 }

@@ -564,17 +564,17 @@ export default function ReviewPage() {
                                 strokeWidth="3"
                                 fill="transparent"
                                 strokeLinecap="round"
-                                strokeDasharray={`${(caseData.feedback.specificInsights as any)[expandedSkill] * 10}, 100`}
+                                strokeDasharray={`${Math.min(((caseData.feedback.specificInsights as any)[expandedSkill] || 0) * 10, 100)}, 100`}
                                 d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                               />
                             </svg>
                             <div className="absolute inset-0 flex items-center justify-center">
                               <span className="text-3xl font-bold text-gray-700">
-                                {(caseData.feedback.specificInsights as any)[expandedSkill]}
+                                {Math.min(((caseData.feedback.specificInsights as any)[expandedSkill] || 0), 10)}
                               </span>
                             </div>
                           </div>
-                          <h3 className="text-xl font-semibold text-gray-800">Score: {(caseData.feedback.specificInsights as any)[expandedSkill]}/10</h3>
+                          <h3 className="text-xl font-semibold text-gray-800">Score: {Math.min(((caseData.feedback.specificInsights as any)[expandedSkill] || 0), 10)}/10</h3>
                         </div>
 
                         <div className="bg-gray-50 rounded-lg p-4">
@@ -639,12 +639,23 @@ export default function ReviewPage() {
                   // Grid View
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {Object.entries(caseData.feedback.specificInsights).map(([skill, score]) => {
+                      console.log(`Skill: ${skill}, Score: ${score}, Type: ${typeof score}`);
+                      
                       const getScoreColor = (score: number) => {
                         if (score >= 8) return 'from-green-500 to-emerald-500';
                         if (score >= 6) return 'from-yellow-500 to-orange-500';
                         if (score >= 4) return 'from-orange-500 to-red-500';
                         return 'from-red-500 to-red-600';
                       };
+                      
+                      // Ensure score is a number and handle edge cases
+                      const numericScore = typeof score === 'number' ? score : parseFloat(score) || 0;
+                      const displayScore = Math.min(Math.max(numericScore, 0), 10); // Clamp between 0-10
+                      const progressPercentage = (displayScore / 10) * 100;
+                      
+                      console.log(`Grid - Skill: ${skill}, Original: ${score}, Numeric: ${numericScore}, Display: ${displayScore}, Progress: ${progressPercentage}%`);
+                      console.log(`Grid - strokeDasharray will be: "${progressPercentage}, 100"`);
+                      console.log(`Grid - style strokeDasharray will be: "${progressPercentage}, 100"`);
                       
                       return (
                         <div 
@@ -665,17 +676,21 @@ export default function ReviewPage() {
                                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                                   />
                                   <path
-                                    className={`text-${score >= 8 ? 'green' : score >= 6 ? 'yellow' : score >= 4 ? 'orange' : 'red'}-500`}
+                                    className={`text-${displayScore >= 8 ? 'green' : displayScore >= 6 ? 'yellow' : displayScore >= 4 ? 'orange' : 'red'}-500`}
                                     stroke="currentColor"
                                     strokeWidth="3"
                                     fill="transparent"
                                     strokeLinecap="round"
-                                    strokeDasharray={`${score * 10}, 100`}
+                                    strokeDasharray={`${progressPercentage}, 100`}
+                                    style={{ 
+                                      strokeDasharray: `${progressPercentage}, 100`,
+                                      stroke: displayScore >= 8 ? '#10b981' : displayScore >= 6 ? '#eab308' : displayScore >= 4 ? '#f97316' : '#ef4444'
+                                    }}
                                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                                   />
                                 </svg>
                                 <div className="absolute inset-0 flex items-center justify-center">
-                                  <span className="text-xl font-bold text-gray-700">{score}</span>
+                                  <span className="text-xl font-bold text-gray-700">{displayScore}</span>
                                 </div>
                               </div>
                               <h4 className="font-semibold text-gray-800 capitalize text-lg mb-2">
